@@ -1,0 +1,2 @@
+- [Supabase Node 20 WebSocket fix](supabase-node20-ws.md) — server admin client crashes on import in Node 20; stub globalThis.WebSocket before createClient
+- [Supabase config injection pattern](supabase-config-injection.md) — browser can't read server secrets; /api/config endpoint serves SUPABASE_URL + ANON_KEY at runtime; main.tsx fetches before mounting React
