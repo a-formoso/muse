@@ -18,7 +18,16 @@ export function getSupabaseClient(): SupabaseClient {
   const url = (window as any).__SUPABASE_URL__ as string;
   const key = (window as any).__SUPABASE_ANON_KEY__ as string;
   if (!url || !key) throw new Error("Supabase config not injected");
-  _client = createClient(url, key);
+  _client = createClient(url, key, {
+    auth: {
+      // Bypass the Web Locks API (navigator.locks). Inside iframed/preview
+      // environments — notably Replit's editor webview — the lock can stall and
+      // make auth calls (signInWithPassword, getSession) hang forever. The lock
+      // only coordinates token refresh across tabs; running the critical section
+      // directly is safe for this single-session app.
+      lock: async (_name: string, _acquireTimeout: number, fn: () => Promise<any>) => fn(),
+    },
+  });
   return _client;
 }
 
