@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { StoryOption } from "../types";
 import { PRESEEDED_OPTIONS } from "../preseededData";
+import { getAuthHeader } from "../lib/authHeader";
 import {
   Sparkles, ArrowRight, Edit3, CheckCircle, Volume2,
   Fingerprint, Sliders, Copy, ChevronLeft, ChevronRight
@@ -49,7 +50,7 @@ export function Phase1Discovery({ onSelectOption, onLockOption, selectedOptionId
     try {
       const resp = await fetch("/api/generate-phase1", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...(await getAuthHeader()) },
         body: JSON.stringify({ customizedPremise: premise }),
       });
       const data = await resp.json();

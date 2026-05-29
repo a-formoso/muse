@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Blueprint } from "../types";
 import { PRESEEDED_SCRIPT } from "../preseededData";
+import { getAuthHeader } from "../lib/authHeader";
 import { Sparkles, Copy, Calendar, Download, FileText, Check, HelpCircle, AlertTriangle } from "lucide-react";
 import { motion } from "motion/react";
 
@@ -320,7 +321,7 @@ export function Phase3Script({ blueprint, selectedScriptText, onUpdateScriptText
     try {
       const resp = await fetch("/api/generate-phase3", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...(await getAuthHeader()) },
         body: JSON.stringify({ blueprint }),
       });
       const data = await resp.json();

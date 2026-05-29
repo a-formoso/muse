@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { StoryOption, Blueprint, BeatSheet, SubtextualBeat, Sequence } from "../types";
 import { PRESEEDED_BLUEPRINT } from "../preseededData";
+import { getAuthHeader } from "../lib/authHeader";
 import { GreenhouseVisualizer } from "./GreenhouseVisualizer";
 import {
   Sparkles, ArrowRight, ChevronLeft, ChevronRight, ChevronDown,
@@ -59,7 +60,7 @@ export function Phase2Blueprint({ chosenOption, onSelectBlueprint, selectedBluep
     setIsLoading(true); setErrorInfo(null);
     try {
       const resp = await fetch("/api/generate-phase2", {
-        method: "POST", headers: { "Content-Type": "application/json" },
+        method: "POST", headers: { "Content-Type": "application/json", ...(await getAuthHeader()) },
         body: JSON.stringify({ chosenOption }),
       });
       const data = await resp.json();

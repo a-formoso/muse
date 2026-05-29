@@ -4,7 +4,7 @@ import path from "path";
 import dotenv from "dotenv";
 import Anthropic from "@anthropic-ai/sdk";
 import { createServer as createViteServer } from "vite";
-import { verifyToken, resolveAccessTier, checkAndIncrementUsage } from "./server/supabaseAdmin";
+import { verifyToken, resolveAccessTier, checkAndIncrementUsage, type TierName } from "./server/supabaseAdmin";
 
 // Load environment variables
 dotenv.config();
@@ -27,8 +27,28 @@ function cleanJSONString(str: string): string {
   return cleaned.trim();
 }
 
-// Story generation runs on Anthropic's Claude Opus 4.8.
-const CLAUDE_MODEL = "claude-opus-4-8";
+// Story generation runs on Anthropic's Claude. Premium subscription tiers
+// (director, studio) generate on Opus 4.8; lower/free tiers on Sonnet 4.6.
+const OPUS_MODEL = "claude-opus-4-8";
+const SONNET_MODEL = "claude-sonnet-4-6";
+const CLAUDE_MODEL = OPUS_MODEL; // default + status headline
+
+function modelForTier(tier: TierName): string {
+  return tier === "director" || tier === "studio" ? OPUS_MODEL : SONNET_MODEL;
+}
+
+// Resolve the Claude model for a request from the caller's subscription tier.
+// Unauthenticated or unresolvable callers fall back to Sonnet (the lower tier).
+async function modelForRequest(req: express.Request): Promise<string> {
+  try {
+    const userId = await verifyToken(req.headers.authorization);
+    if (!userId) return SONNET_MODEL;
+    const access = await resolveAccessTier(userId);
+    return modelForTier(access.tier);
+  } catch {
+    return SONNET_MODEL;
+  }
+}
 
 // Lazy initialization of the Anthropic client to prevent crashing if the key is missing on startup
 let aiClient: Anthropic | null = null;
@@ -54,10 +74,11 @@ async function generateWithClaude(params: {
   system: string;
   prompt: string;
   maxTokens?: number;
+  model?: string;
 }): Promise<string> {
   const client = getAnthropicClient();
   const stream = client.messages.stream({
-    model: CLAUDE_MODEL,
+    model: params.model ?? CLAUDE_MODEL,
     max_tokens: params.maxTokens ?? 32000,
     thinking: { type: "adaptive" },
     system: [
@@ -263,7 +284,9 @@ Generate THREE distinct narrative directions for this setup. For each option, ou
 
 Reject all surface-level tropes and empty exposition. Output ONLY the raw JSON. Do not include markdown wraps or prefixing.`;
 
+    const model = await modelForRequest(req);
     const text = await generateWithClaude({
+      model,
       system: "You are an elite, award-winning Hollywood screenwriter and script analyst. Your creative process is strictly governed by the narrative architecture of Robert McKee (Story) and Stanislavskian behavioral subtext. Output ONLY raw JSON — no markdown, no code fences, no explanation.",
       prompt,
       maxTokens: 32000,
@@ -363,7 +386,9 @@ Output a single, consolidated JSON block matching this exact structural schema:
 
 Generate detailed beat_progressions (minimum 3 beats per scene) for ALL scenes across Acts I, II, and III. Make sure every beat features active, capitalized gerund subtext tags and references vocal_state values. Ensure output is strictly Valid JSON.`;
 
+    const model = await modelForRequest(req);
     const text = await generateWithClaude({
+      model,
       system: "You are a master script designer. Return the pre-production blueprint exactly matching the structural JSON schema provided including vocal state mappings. Output ONLY raw JSON — no markdown, no code fences, no explanation.",
       prompt,
       maxTokens: 64000,
@@ -421,7 +446,9 @@ Translate this blueprint into a professional, production-ready screenplay. Begin
 
 Output plain text screenplay only. Begin immediately on line 1.`;
 
+    const model = await modelForRequest(req);
     const script = await generateWithClaude({
+      model,
       system: systemInstruction,
       prompt,
       maxTokens: 32000,
@@ -676,7 +703,9 @@ Return a JSON object with this exact shape:
 
 Base scores on: narrative tension, pacing variety, visual uniqueness of flora/environment descriptors, vocal state escalation arc, and subtext density. Output ONLY raw JSON.`;
 
+    const model = await modelForRequest(req);
     const text = await generateWithClaude({
+      model,
       system: "You are a film virality analyst. Output ONLY raw JSON — no markdown, no code fences, no explanation.",
       prompt,
       maxTokens: 4000,
