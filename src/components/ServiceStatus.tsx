@@ -35,12 +35,12 @@ export function ServiceStatus({ compact = false }: ServiceStatusProps) {
 
   if (!status && !checking) return null;
 
-  const modelLabel = status?.claudeModel ? "4.8" : "";
+  const modelLabel = status?.claudeModel ? "4.6" : "";
 
   const claudeTitle = checking
     ? "Checking Claude…"
     : status?.claude
-    ? "Claude Opus 4.8 — live"
+    ? "Claude Sonnet 4.6 — live"
     : "Claude — unavailable (check API key)";
 
   const hfTitle = checking

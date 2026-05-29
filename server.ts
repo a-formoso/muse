@@ -27,14 +27,17 @@ function cleanJSONString(str: string): string {
   return cleaned.trim();
 }
 
-// Story generation runs on Anthropic's Claude. Premium subscription tiers
-// (director, studio) generate on Opus 4.8; lower/free tiers on Sonnet 4.6.
+// Story generation runs on Anthropic's Claude. Sonnet 4.6 is the default —
+// fast, cost-effective, and comfortable within Tier-1 rate limits.
 const OPUS_MODEL = "claude-opus-4-8";
 const SONNET_MODEL = "claude-sonnet-4-6";
-const CLAUDE_MODEL = OPUS_MODEL; // default + status headline
+const CLAUDE_MODEL = SONNET_MODEL; // default + status headline
 
-function modelForTier(tier: TierName): string {
-  return tier === "director" || tier === "studio" ? OPUS_MODEL : SONNET_MODEL;
+function modelForTier(_tier: TierName): string {
+  // Sonnet 4.6 for all tiers for now. To give premium tiers (director/studio)
+  // Opus once the account is on a higher Anthropic usage tier, return
+  // OPUS_MODEL for those tiers here.
+  return SONNET_MODEL;
 }
 
 // Resolve the Claude model for a request from the caller's subscription tier.
@@ -75,22 +78,37 @@ async function generateWithClaude(params: {
   prompt: string;
   maxTokens?: number;
   model?: string;
+  timeoutMs?: number;
 }): Promise<string> {
   const client = getAnthropicClient();
-  const stream = client.messages.stream({
-    model: params.model ?? CLAUDE_MODEL,
-    max_tokens: params.maxTokens ?? 32000,
-    thinking: { type: "adaptive" },
-    system: [
-      { type: "text", text: params.system, cache_control: { type: "ephemeral" } },
-    ],
-    messages: [{ role: "user", content: params.prompt }],
-  });
-  const message = await stream.finalMessage();
-  return message.content
-    .filter((b): b is Anthropic.TextBlock => b.type === "text")
-    .map((b) => b.text)
-    .join("");
+  // Abort if generation runs long (e.g. rate-limit backoff on a low tier) so the
+  // endpoint can fall back to pre-seeded data instead of hanging the client forever.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), params.timeoutMs ?? 90_000);
+  try {
+    const stream = client.messages.stream(
+      {
+        model: params.model ?? CLAUDE_MODEL,
+        max_tokens: params.maxTokens ?? 32000,
+        // Thinking disabled: these are prescriptive schema-filling prompts, and
+        // thinking tokens both add latency and count against the output-tokens/min
+        // rate limit — neither worth it here.
+        thinking: { type: "disabled" },
+        system: [
+          { type: "text", text: params.system, cache_control: { type: "ephemeral" } },
+        ],
+        messages: [{ role: "user", content: params.prompt }],
+      },
+      { signal: controller.signal },
+    );
+    const message = await stream.finalMessage();
+    return message.content
+      .filter((b): b is Anthropic.TextBlock => b.type === "text")
+      .map((b) => b.text)
+      .join("");
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // ── /api/status — lightweight health check for both AI services ──
