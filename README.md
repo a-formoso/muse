@@ -4,9 +4,9 @@
 
 It guides you through a six-phase pipeline that turns a single premise into a complete
 pre-production package: story architecture → characters → screenplay → visuals →
-storyboard shots → final assembly. Text and image generation run on Google Gemini,
-storyboard/shot jobs on Higgsfield, optional voice synthesis on ElevenLabs, with
-Supabase for auth and project persistence.
+storyboard shots → final assembly. Story/text generation runs on Anthropic's Claude
+(Opus 4.8), image and video shots on Higgsfield, optional voice synthesis on ElevenLabs,
+with Supabase for auth and project persistence.
 
 Deployed as a subdomain of Infinite Studio (`muse.infinitestudioai.com`).
 
@@ -14,7 +14,7 @@ Deployed as a subdomain of Infinite Studio (`muse.infinitestudioai.com`).
 
 - **Frontend:** React 19 + TypeScript, Vite, TailwindCSS 4
 - **Backend:** Express (`server.ts`), bundled with esbuild
-- **Services:** Google Gemini (`@google/genai`), Higgsfield, ElevenLabs, Supabase
+- **Services:** Anthropic Claude (`@anthropic-ai/sdk`), Higgsfield, ElevenLabs, Supabase
 
 ## Run locally
 
@@ -25,7 +25,7 @@ Deployed as a subdomain of Infinite Studio (`muse.infinitestudioai.com`).
    npm install
    ```
 2. Create a `.env` (or `.env.local`) from [.env.example](.env.example) and fill in your keys.
-   At minimum you need `GEMINI_API_KEY`; the app degrades gracefully without the others.
+   At minimum you need `ANTHROPIC_API_KEY`; the app degrades gracefully without the others.
 3. Start the dev server (Vite + Express on port 5000):
    ```
    npm run dev

@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useState, useCallback, useRef, type ReactNode } from "react";
 import type { Session, User } from "@supabase/supabase-js";
-import { supabase } from "../lib/supabase";
+import { supabase, isSupabaseConfigured } from "../lib/supabase";
 import { TIERS, type AccessTier, type TierName, type UsageState } from "../lib/accessTier";
 
 interface AuthContextValue {
@@ -158,7 +158,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [user, resolveAccess]);
 
   const signOut = useCallback(async () => {
-    await supabase.auth.signOut();
+    if (isSupabaseConfigured()) {
+      await supabase.auth.signOut();
+    }
     setSession(null);
     setUser(null);
     setAccessTier(TIERS.none);
@@ -168,6 +170,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
+    // If the backend hasn't injected Supabase credentials, skip all auth
+    // initialization and render unauthenticated — never throw and blank the app.
+    if (!isSupabaseConfigured()) {
+      setLoading(false);
+      return;
+    }
+
     supabase.auth.getSession().then(({ data }) => {
       setSession(data.session);
       setUser(data.session?.user ?? null);

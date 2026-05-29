@@ -16,8 +16,8 @@ const FEATURES = [
   },
   {
     icon: Sparkles,
-    title: "Google's Visual Generation",
-    desc: "Gemini 2.0 Flash drives every narrative phase — from cosmology to character to cinematic script.",
+    title: "Claude Story Intelligence",
+    desc: "Claude Opus 4.8 drives every narrative phase — from cosmology to character to cinematic script.",
   },
   {
     icon: Zap,
@@ -85,7 +85,7 @@ export function LandingPage({ onAuthenticated }: LandingPageProps) {
           </h2>
 
           <p className="text-lg text-slate-400 max-w-xl mx-auto leading-relaxed">
-            From idea to screenplay to shot list — powered by Google AI and ByteDance.
+            From idea to screenplay to shot list — powered by Anthropic's Claude and ByteDance.
           </p>
 
           <div className="flex items-center justify-center gap-4 flex-wrap">

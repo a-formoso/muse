@@ -71,7 +71,7 @@ export function Phase2Blueprint({ chosenOption, onSelectBlueprint, selectedBluep
         setBlueprint(PRESEEDED_BLUEPRINT); onSelectBlueprint(PRESEEDED_BLUEPRINT);
       }
     } catch {
-      setErrorInfo("Gemini endpoint unreachable. Rendered preseeded maps.");
+      setErrorInfo("AI endpoint unreachable. Rendered preseeded maps.");
       setBlueprint(PRESEEDED_BLUEPRINT); onSelectBlueprint(PRESEEDED_BLUEPRINT);
     } finally { setIsLoading(false); }
   };
@@ -236,7 +236,7 @@ export function Phase2Blueprint({ chosenOption, onSelectBlueprint, selectedBluep
           className="flex items-center gap-2 px-4 py-1.5 rounded-lg bg-orange-600 hover:bg-orange-500 disabled:opacity-50 text-xs text-white font-mono font-bold transition-all cursor-pointer shrink-0"
         >
           <Sparkles className="w-3.5 h-3.5" />
-          {isLoading ? "Compiling..." : "Expand with Gemini AI"}
+          {isLoading ? "Compiling..." : "Expand with Claude"}
         </button>
       </div>
 
@@ -318,7 +318,7 @@ export function Phase2Blueprint({ chosenOption, onSelectBlueprint, selectedBluep
                 <div className="border-t border-white/8 pt-3 space-y-2">
                   <span className="text-slate-500 block text-[9px] font-mono uppercase tracking-wider mb-1.5">Sequences</span>
                   {actSequences.length === 0
-                    ? <span className="text-[10px] text-slate-600 italic">Generate with Gemini AI.</span>
+                    ? <span className="text-[10px] text-slate-600 italic">Generate with Claude.</span>
                     : actSequences.map(s => (
                         <button
                           key={s.sequence_id}
@@ -511,7 +511,7 @@ export function Phase2Blueprint({ chosenOption, onSelectBlueprint, selectedBluep
                   <div className="space-y-2">
                     <span className="font-mono text-[9px] text-slate-500 uppercase tracking-widest block">Beat Progression</span>
                     {beats.length === 0 ? (
-                      <p className="text-[11px] text-slate-600 italic font-mono py-4 text-center">Generate with Gemini AI.</p>
+                      <p className="text-[11px] text-slate-600 italic font-mono py-4 text-center">Generate with Claude.</p>
                     ) : (
                       <>
                         {(beatsExpanded ? beats : beats.slice(0, 2)).map((beat, bi) => {

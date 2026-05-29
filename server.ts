@@ -2,7 +2,7 @@ import express from "express";
 import http from "http";
 import path from "path";
 import dotenv from "dotenv";
-import { GoogleGenAI, Type } from "@google/genai";
+import Anthropic from "@anthropic-ai/sdk";
 import { createServer as createViteServer } from "vite";
 import { verifyToken, resolveAccessTier, checkAndIncrementUsage } from "./server/supabaseAdmin";
 
@@ -15,7 +15,7 @@ const PORT = 5000;
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
-// Helper to sanitize JSON response from Gemini
+// Helper to sanitize JSON response from the model (strip any markdown fences)
 function cleanJSONString(str: string): string {
   let cleaned = str.trim();
   if (cleaned.startsWith("```json")) {
@@ -27,133 +27,60 @@ function cleanJSONString(str: string): string {
   return cleaned.trim();
 }
 
-// Lazy initialization of GoogleGenAI to prevent crashing if the key is missing on startup
-let aiClient: GoogleGenAI | null = null;
-function getGeminiClient(): GoogleGenAI {
+// Story generation runs on Anthropic's Claude Opus 4.8.
+const CLAUDE_MODEL = "claude-opus-4-8";
+
+// Lazy initialization of the Anthropic client to prevent crashing if the key is missing on startup
+let aiClient: Anthropic | null = null;
+function getAnthropicClient(): Anthropic {
   if (!aiClient) {
-    const apiKey = process.env.GEMINI_API_KEY;
+    const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) {
-      throw new Error("GEMINI_API_KEY environment variable is not set in Secrets. Using high-fidelity pre-compiled story simulation.");
+      throw new Error("ANTHROPIC_API_KEY environment variable is not set. Using high-fidelity pre-compiled story simulation.");
     }
-    aiClient = new GoogleGenAI({
-      apiKey,
-      httpOptions: {
-        headers: {
-          "User-Agent": "muse",
-        },
-      },
-    });
+    aiClient = new Anthropic({ apiKey });
   }
   return aiClient;
 }
 
-// Model chain: try each in order until one succeeds.
-// gemini-2.5-flash supports thinkingConfig; 2.0-flash and 1.5-flash do not.
-const MODEL_CHAIN = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"];
-const PRIMARY_MODEL = MODEL_CHAIN[0]; // used for status display
-
-function isBillingOrQuotaError(e: any): boolean {
-  const msg = (e?.message || "") + (e?.status || "");
-  return (
-    msg.includes("429") ||
-    msg.includes("RESOURCE_EXHAUSTED") ||
-    msg.includes("prepayment") ||
-    msg.includes("quota") ||
-    msg.includes("RATE_LIMIT") ||
-    msg.includes("rate_limit")
-  );
-}
-
-function isPermanentBillingError(e: any): boolean {
-  const msg = e?.message || "";
-  return msg.includes("prepayment") || msg.includes("prepay");
-}
-
-// Parse "retry in Xs" from Google's error payload
-function parseRetryDelayMs(e: any): number {
-  try {
-    const raw = e?.message || "";
-    const match = raw.match(/retry[^0-9]*([0-9]+(?:\.[0-9]+)?)\s*s/i);
-    if (match) return Math.ceil(parseFloat(match[1])) * 1000;
-    const details = JSON.parse(raw)?.error?.details;
-    if (Array.isArray(details)) {
-      for (const d of details) {
-        if (d?.retryDelay) {
-          const s = parseFloat(d.retryDelay.replace("s", ""));
-          return Math.ceil(s) * 1000;
-        }
-      }
-    }
-  } catch {}
-  return 22000; // default 22s if unparseable
-}
-
-function stripThinking(params: any): any {
-  const p = { ...params };
-  if (p.config) {
-    const { thinkingConfig, ...rest } = p.config;
-    p.config = Object.keys(rest).length ? rest : undefined;
-  }
-  return p;
-}
-
-async function generateWithFallback(params: Parameters<GoogleGenAI["models"]["generateContent"]>[0]): Promise<ReturnType<GoogleGenAI["models"]["generateContent"]>> {
-  const ai = getGeminiClient();
-  let lastError: any;
-
-  for (const model of MODEL_CHAIN) {
-    // Strip thinkingConfig for models that don't support it
-    const useParams = model === "gemini-2.5-flash" ? params : stripThinking(params);
-    try {
-      const result = await ai.models.generateContent({ ...useParams, model });
-      if (model !== PRIMARY_MODEL) {
-        console.log(`[Gemini] succeeded with fallback model: ${model}`);
-      }
-      return result;
-    } catch (e: any) {
-      lastError = e;
-      if (!isBillingOrQuotaError(e)) throw e; // non-quota error — surface immediately
-      if (isPermanentBillingError(e)) {
-        console.warn(`[Gemini] ${model} permanent billing error (prepay depleted) — trying next model`);
-        continue;
-      }
-      // Transient rate-limit: wait the suggested delay then retry ONCE before moving on
-      const delayMs = parseRetryDelayMs(e);
-      console.warn(`[Gemini] ${model} rate-limited — waiting ${delayMs}ms then trying next model`);
-      await new Promise((r) => setTimeout(r, Math.min(delayMs, 30000)));
-      continue;
-    }
-  }
-
-  throw lastError;
+/**
+ * Generate a completion from Claude with adaptive thinking. Streams the response
+ * (so large outputs like the Phase 2 blueprint don't hit HTTP timeouts) and returns
+ * the concatenated text content. The system prompt is sent as a cacheable block —
+ * prompt caching activates automatically once the prefix exceeds the model's minimum
+ * cacheable size, so repeated calls with the same system prompt are cheaper.
+ */
+async function generateWithClaude(params: {
+  system: string;
+  prompt: string;
+  maxTokens?: number;
+}): Promise<string> {
+  const client = getAnthropicClient();
+  const stream = client.messages.stream({
+    model: CLAUDE_MODEL,
+    max_tokens: params.maxTokens ?? 32000,
+    thinking: { type: "adaptive" },
+    system: [
+      { type: "text", text: params.system, cache_control: { type: "ephemeral" } },
+    ],
+    messages: [{ role: "user", content: params.prompt }],
+  });
+  const message = await stream.finalMessage();
+  return message.content
+    .filter((b): b is Anthropic.TextBlock => b.type === "text")
+    .map((b) => b.text)
+    .join("");
 }
 
 // ── /api/status — lightweight health check for both AI services ──
 app.get("/api/status", async (req, res) => {
-  const status = { gemini: false, geminiModel: "", higgsfield: false };
+  const status = { claude: false, claudeModel: "", higgsfield: false };
 
-  // Check Gemini — walk the model chain until one responds.
-  // getGeminiClient() throws if the key is missing; keep that contained so a
-  // missing/invalid key degrades to { gemini: false } instead of crashing the server.
-  try {
-    const ai = getGeminiClient();
-    for (const model of MODEL_CHAIN) {
-      try {
-        await ai.models.generateContent({
-          model,
-          contents: "Reply with the word OK only.",
-          config: { maxOutputTokens: 5 },
-        });
-        status.gemini = true;
-        status.geminiModel = model;
-        break;
-      } catch (_) {
-        // try next
-      }
-    }
-  } catch (_) {
-    // No/invalid GEMINI_API_KEY — report unavailable rather than throwing.
-    status.gemini = false;
+  // Check Claude — report availability from key presence rather than burning
+  // tokens on a live ping. (The generation endpoints surface real errors per-request.)
+  if (process.env.ANTHROPIC_API_KEY) {
+    status.claude = true;
+    status.claudeModel = CLAUDE_MODEL;
   }
 
   // Check Higgsfield — lightweight auth ping
@@ -181,9 +108,9 @@ app.get("/api/config", (req, res) => {
   });
 });
 
-// API endpoint to check if Gemini key is available
+// API endpoint to check if the Claude (Anthropic) key is available
 app.get("/api/gemini-check", (req, res) => {
-  const hasKey = !!process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== "MY_GEMINI_API_KEY";
+  const hasKey = !!process.env.ANTHROPIC_API_KEY && process.env.ANTHROPIC_API_KEY !== "MY_ANTHROPIC_API_KEY";
   res.json({ hasKey });
 });
 
@@ -193,7 +120,6 @@ app.post("/api/generate-phase1", async (req, res) => {
   const targetPremise = customizedPremise || "What if a high-ranking corporate saboteur is forced to execute a quiet chemical poisoning during a high-stakes dinner inside a smart, hermetic greenhouse that visually manifests human stress hormones?";
 
   try {
-    const ai = getGeminiClient();
     const prompt = `You are an elite, award-winning Hollywood screenwriter and script analyst. Your creative process is strictly governed by the narrative architecture of Robert McKee (Story) and Stanislavskian behavioral subtext.
 
 We are starting PHASE 1: THE COSMOLOGY & THE DIGITAL ACTORS of our short film pipeline.
@@ -337,24 +263,20 @@ Generate THREE distinct narrative directions for this setup. For each option, ou
 
 Reject all surface-level tropes and empty exposition. Output ONLY the raw JSON. Do not include markdown wraps or prefixing.`;
 
-    const response = await generateWithFallback({
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        thinkingConfig: { thinkingBudget: 8000 },
-        systemInstruction: "You are an elite, award-winning Hollywood screenwriter and script analyst. Your creative process is strictly governed by the narrative architecture of Robert McKee (Story) and Stanislavskian behavioral subtext. Output ONLY raw JSON — no markdown, no code fences, no explanation.",
-      },
+    const text = await generateWithClaude({
+      system: "You are an elite, award-winning Hollywood screenwriter and script analyst. Your creative process is strictly governed by the narrative architecture of Robert McKee (Story) and Stanislavskian behavioral subtext. Output ONLY raw JSON — no markdown, no code fences, no explanation.",
+      prompt,
+      maxTokens: 32000,
     });
 
-    const text = response.text;
     if (!text) {
-      throw new Error("Empty response from Gemini.");
+      throw new Error("Empty response from Claude.");
     }
-    
+
     const parsed = JSON.parse(cleanJSONString(text));
     res.json({ success: true, options: parsed });
   } catch (error: any) {
-    console.error("Gemini Phase 1 generation failed:", error.message);
+    console.error("Claude Phase 1 generation failed:", error.message);
     res.status(200).json({
       success: false,
       error: error.message,
@@ -372,7 +294,6 @@ app.post("/api/generate-phase2", async (req, res) => {
   }
 
   try {
-    const ai = getGeminiClient();
     const prompt = `We are proceeding to PHASE 2: THE PRE-PRODUCTION BLUEPRINT & STRUCTURAL SCENE DESIGN.
 Expand this chosen story direction into a tightly proportional, multi-sequence framework spanning Act One, Act Two, and Act Three.
 You are strictly forbidden from leaving "story vacuums" in Act 1 or Act 3. Use the generated Lego characters array to structure the sequences and make actor subtext beat sheets hyper-specific.
@@ -442,16 +363,12 @@ Output a single, consolidated JSON block matching this exact structural schema:
 
 Generate detailed beat_progressions (minimum 3 beats per scene) for ALL scenes across Acts I, II, and III. Make sure every beat features active, capitalized gerund subtext tags and references vocal_state values. Ensure output is strictly Valid JSON.`;
 
-    const response = await generateWithFallback({
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        thinkingConfig: { thinkingBudget: 10000 },
-        systemInstruction: "You are a master script designer. Return the pre-production blueprint exactly matching the structural JSON schema provided including vocal state mappings.",
-      },
+    const text = await generateWithClaude({
+      system: "You are a master script designer. Return the pre-production blueprint exactly matching the structural JSON schema provided including vocal state mappings. Output ONLY raw JSON — no markdown, no code fences, no explanation.",
+      prompt,
+      maxTokens: 64000,
     });
 
-    const text = response.text;
     if (!text) {
       throw new Error("No response.");
     }
@@ -459,7 +376,7 @@ Generate detailed beat_progressions (minimum 3 beats per scene) for ALL scenes a
     const parsed = JSON.parse(cleanJSONString(text));
     res.json({ success: true, blueprint: parsed });
   } catch (error: any) {
-    console.error("Gemini Phase 2 generation failed:", error.message);
+    console.error("Claude Phase 2 generation failed:", error.message);
     res.status(200).json({
       success: false,
       error: error.message,
@@ -504,17 +421,15 @@ Translate this blueprint into a professional, production-ready screenplay. Begin
 
 Output plain text screenplay only. Begin immediately on line 1.`;
 
-    const response = await generateWithFallback({
-      contents: prompt,
-      config: {
-        thinkingConfig: { thinkingBudget: 8000 },
-        systemInstruction,
-      },
+    const script = await generateWithClaude({
+      system: systemInstruction,
+      prompt,
+      maxTokens: 32000,
     });
 
-    res.json({ success: true, script: response.text });
+    res.json({ success: true, script });
   } catch (error: any) {
-    console.error("Gemini Phase 3 generation failed:", error.message);
+    console.error("Claude Phase 3 generation failed:", error.message);
     res.status(200).json({
       success: false,
       error: error.message,
@@ -727,7 +642,7 @@ app.post("/api/elevenlabs/synthesize", async (req, res) => {
   }
 });
 
-// ── /api/virality-score — Gemini-powered virality analysis ──
+// ── /api/virality-score — Claude-powered virality analysis ──
 app.post("/api/virality-score", async (req, res) => {
   const { blueprint, clipOrder } = req.body;
   if (!blueprint) {
@@ -761,16 +676,12 @@ Return a JSON object with this exact shape:
 
 Base scores on: narrative tension, pacing variety, visual uniqueness of flora/environment descriptors, vocal state escalation arc, and subtext density. Output ONLY raw JSON.`;
 
-    const response = await generateWithFallback({
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        thinkingConfig: { thinkingBudget: 2000 },
-        systemInstruction: "You are a film virality analyst. Output only raw JSON.",
-      },
+    const text = await generateWithClaude({
+      system: "You are a film virality analyst. Output ONLY raw JSON — no markdown, no code fences, no explanation.",
+      prompt,
+      maxTokens: 4000,
     });
 
-    const text = response.text;
     if (!text) throw new Error("Empty response.");
     const parsed = JSON.parse(cleanJSONString(text));
     res.json({ success: true, scores: parsed });
