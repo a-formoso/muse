@@ -53,21 +53,13 @@ export const TIERS: Record<TierName, AccessTier> = {
   studio:     { tier: "studio",     phases_allowed: 6, studio_productions_limit: null, character_grids_limit: 50,   shot_generations_limit: 150, video_promotions_limit: 50 },
 };
 
-function studioPlantToTier(val: string | null | undefined): TierName | null {
-  if (!val) return null;
-  const v = val.toLowerCase().trim();
-  if (v === "playwright") return "playwright";
-  if (v === "director") return "director";
-  if (v === "studio") return "studio";
-  return null;
-}
-
-function membershipTierToStudio(val: string | null | undefined): TierName | null {
-  if (!val) return null;
-  const v = val.toLowerCase().replace(/[_\s-]/g, "");
-  if (v.includes("innercircle") || v.includes("inner")) return "studio";
-  if (v.length > 0) return "director";
-  return null;
+// Map an infinitestudioai.com app_subscriptions.tier to a Muse access tier.
+// studio_lot → director (all phases, capped quota); executive_producer → studio (max quota).
+function membershipTierToMuse(tier: string | null | undefined): TierName {
+  const v = (tier || "").toLowerCase().trim();
+  if (v === "executive_producer") return "studio";
+  if (v === "studio_lot") return "director";
+  return "director"; // unknown active/trialing paid tier → grant director-level access
 }
 
 /**
@@ -82,59 +74,83 @@ export async function verifyToken(authHeader: string | undefined): Promise<strin
 }
 
 /**
- * Resolve access tier using the real schema:
- *  1. user_profiles.studio_plan  (standalone Studio subscription)
- *  2. users.active_subscription_tier  (IS membership)
- *  3. app_subscriptions  (active rows)
- *  4. user_profiles.studio_trial_used  (trial gate)
- *  5. none
+ * Resolve a user's Muse access tier from the SHARED infinitestudioai.com Supabase.
+ * Mirrors the website's access rule:
+ *   1. users.is_admin = true            → top access (studio)
+ *   2. app_subscriptions (active/trialing) → mapped by `tier`
+ *      (studio_lot → director, executive_producer → studio)
+ *   3. user_profiles.studio_trial_used = false → one-time Muse trial (phases 1-3)
+ *   4. otherwise → none
+ * NOTE: app_subscriptions.user_id is the internal users.id, NOT the Supabase auth id,
+ * so we resolve users.id from supabase_id first.
  */
 export async function resolveAccessTier(userId: string): Promise<AccessTier> {
-  // Step 1: studio_plan in user_profiles
-  const { data: profile } = await supabaseAdmin
-    .from("user_profiles")
-    .select("studio_plan, studio_trial_used")
-    .eq("id", userId)
-    .maybeSingle();
-
-  if (profile?.studio_plan) {
-    const t = studioPlantToTier(profile.studio_plan);
-    if (t) return TIERS[t];
-  }
-
-  // Step 2: IS membership
+  // The website user row, keyed by the Supabase auth id.
   const { data: userRow } = await supabaseAdmin
     .from("users")
-    .select("active_subscription_tier")
+    .select("id, is_admin")
     .eq("supabase_id", userId)
     .maybeSingle();
 
-  if (userRow?.active_subscription_tier) {
-    const t = membershipTierToStudio(userRow.active_subscription_tier);
-    if (t) return TIERS[t];
+  // Admins bypass all paywalls.
+  if (userRow?.is_admin === true) return TIERS.studio;
+
+  // Active or trialing membership → map the subscription tier.
+  if (userRow?.id) {
+    const { data: sub } = await supabaseAdmin
+      .from("app_subscriptions")
+      .select("tier, status, created_at")
+      .eq("user_id", userRow.id)
+      .in("status", ["active", "trialing"])
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (sub?.tier) return TIERS[membershipTierToMuse(sub.tier)];
   }
 
-  // Step 3: app_subscriptions
-  const { data: appSub } = await supabaseAdmin
-    .from("app_subscriptions")
-    .select("plan_name, status, amount")
-    .eq("user_id", userId)
-    .eq("status", "active")
-    .limit(1)
+  // Non-member: optional one-time Muse trial (Phases 1-3) via the user_profiles flag.
+  const { data: profile } = await supabaseAdmin
+    .from("user_profiles")
+    .select("studio_trial_used")
+    .eq("id", userId)
     .maybeSingle();
-
-  if (appSub) {
-    const t = studioPlantToTier(appSub.plan_name) ?? membershipTierToStudio(appSub.plan_name);
-    if (t) return TIERS[t];
-    return TIERS.director;
-  }
-
-  // Step 4: trial
-  if (profile !== null && profile !== undefined && profile.studio_trial_used === false) {
-    return TIERS.trial;
-  }
+  if (profile && profile.studio_trial_used === false) return TIERS.trial;
 
   return TIERS.none;
+}
+
+export interface UsageState {
+  productions_used: number;
+  character_grids_used: number;
+  shot_generations_used: number;
+  video_promotions_used: number;
+}
+
+/** Read the current month's usage counters for a user (0s if no row yet). */
+export async function getMonthlyUsage(userId: string): Promise<UsageState> {
+  const month = new Date().toISOString().slice(0, 7);
+  const { data } = await supabaseAdmin
+    .from("studio_usage")
+    .select("productions_used, character_grids_used, shot_generations_used, video_promotions_used")
+    .eq("user_id", userId)
+    .eq("month", month)
+    .maybeSingle();
+  return {
+    productions_used: (data as any)?.productions_used ?? 0,
+    character_grids_used: (data as any)?.character_grids_used ?? 0,
+    shot_generations_used: (data as any)?.shot_generations_used ?? 0,
+    video_promotions_used: (data as any)?.video_promotions_used ?? 0,
+  };
+}
+
+/** Whether the user still has a Muse trial available (default: no). */
+export async function getTrialUsed(userId: string): Promise<boolean> {
+  const { data } = await supabaseAdmin
+    .from("user_profiles")
+    .select("studio_trial_used")
+    .eq("id", userId)
+    .maybeSingle();
+  return data?.studio_trial_used ?? true;
 }
 
 export type UsageField = "character_grids_used" | "shot_generations_used" | "video_promotions_used";

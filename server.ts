@@ -4,7 +4,9 @@ import path from "path";
 import dotenv from "dotenv";
 import Anthropic from "@anthropic-ai/sdk";
 import { createServer as createViteServer } from "vite";
-import { verifyToken, resolveAccessTier, checkAndIncrementUsage, type TierName } from "./server/supabaseAdmin";
+import { verifyToken, resolveAccessTier, checkAndIncrementUsage, getMonthlyUsage, getTrialUsed, TIERS, type TierName } from "./server/supabaseAdmin";
+
+const EMPTY_USAGE = { productions_used: 0, character_grids_used: 0, shot_generations_used: 0, video_promotions_used: 0 };
 
 // Load environment variables
 dotenv.config();
@@ -145,6 +147,24 @@ app.get("/api/config", (req, res) => {
     supabaseUrl: process.env.SUPABASE_URL || "",
     supabaseAnonKey: process.env.SUPABASE_ANON_KEY || "",
   });
+});
+
+// Authoritative access tier + usage for the logged-in user — single source of truth
+// (resolved server-side with the service-role key against the shared Supabase).
+app.get("/api/access-tier", async (req, res) => {
+  try {
+    const userId = await verifyToken(req.headers.authorization);
+    if (!userId) return res.json({ accessTier: TIERS.none, usage: EMPTY_USAGE, trialUsed: true });
+    const [accessTier, usage, trialUsed] = await Promise.all([
+      resolveAccessTier(userId),
+      getMonthlyUsage(userId),
+      getTrialUsed(userId),
+    ]);
+    res.json({ accessTier, usage, trialUsed });
+  } catch (e: any) {
+    console.error("access-tier resolution failed:", e.message);
+    res.json({ accessTier: TIERS.none, usage: EMPTY_USAGE, trialUsed: true });
+  }
 });
 
 // API endpoint to check if the Claude (Anthropic) key is available

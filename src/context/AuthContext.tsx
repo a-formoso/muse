@@ -35,26 +35,8 @@ const AuthContext = createContext<AuthContextValue>({
 /**
  * Map a studio_plan string to a TierName.
  */
-function studioPlantToTier(val: string | null | undefined): TierName | null {
-  if (!val) return null;
-  const v = val.toLowerCase().trim();
-  if (v === "playwright") return "playwright";
-  if (v === "director") return "director";
-  if (v === "studio") return "studio";
-  return null;
-}
-
-/**
- * Map an IS membership active_subscription_tier to a Studio TierName.
- * IS members get Director-equivalent access at minimum.
- */
-function membershipTierToStudio(val: string | null | undefined): TierName | null {
-  if (!val) return null;
-  const v = val.toLowerCase().replace(/[_\s-]/g, "");
-  if (v.includes("innercircle") || v.includes("inner")) return "studio";
-  if (v.length > 0) return "director";
-  return null;
-}
+// Tier resolution now lives server-side (see /api/access-tier); the client just
+// reflects what the server returns.
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
@@ -65,85 +47,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [trialUsed, setTrialUsed] = useState(false);
   const resolvedRef = useRef(false);
 
-  const resolveAccess = useCallback(async (uid: string) => {
+  // Access tier + usage are resolved AUTHORITATIVELY on the server (service-role key,
+  // against the shared infinitestudioai.com Supabase) via /api/access-tier — the single
+  // source of truth so the UI matches what the server actually enforces.
+  const resolveAccess = useCallback(async (_uid: string) => {
     try {
-      let tier: TierName = "none";
-      let profileTrialUsed = true; // default safe: no trial
-
-      // ── Step 1: user_profiles — studio_plan + trial flag ──
-      // studio_plan is the canonical source for Studio standalone subscriptions.
-      const { data: profile } = await supabase
-        .from("user_profiles")
-        .select("studio_plan, studio_trial_used")
-        .eq("id", uid)
-        .maybeSingle();
-
-      if (profile !== null && profile !== undefined) {
-        profileTrialUsed = profile.studio_trial_used ?? true;
-        const planTier = studioPlantToTier(profile.studio_plan);
-        if (planTier) tier = planTier;
-      }
-
-      // ── Step 2: IS membership — users.active_subscription_tier ──
-      // IS members get director-equivalent or better if they have no explicit studio_plan.
-      if (tier === "none") {
-        const { data: userRow } = await supabase
-          .from("users")
-          .select("active_subscription_tier")
-          .eq("supabase_id", uid)
-          .maybeSingle();
-
-        const memberTier = membershipTierToStudio(userRow?.active_subscription_tier);
-        if (memberTier) tier = memberTier;
-      }
-
-      // ── Step 3: app_subscriptions fallback ──
-      if (tier === "none") {
-        const { data: appSub } = await supabase
-          .from("app_subscriptions")
-          .select("plan_name, status, amount")
-          .eq("user_id", uid)
-          .eq("status", "active")
-          .limit(1)
-          .maybeSingle();
-
-        if (appSub) {
-          const planTier = studioPlantToTier(appSub.plan_name);
-          if (planTier) {
-            tier = planTier;
-          } else {
-            const memberTier = membershipTierToStudio(appSub.plan_name);
-            tier = memberTier ?? "director";
-          }
-        }
-      }
-
-      // ── Step 4: trial — only if profile row exists and studio_trial_used = false ──
-      if (tier === "none") {
-        setTrialUsed(profileTrialUsed);
-        if (profile !== null && profile !== undefined && !profileTrialUsed) {
-          tier = "trial";
-        }
-      }
-
-      console.log(`[AuthContext] uid=${uid.slice(0, 8)}… → tier=${tier}`);
-      setAccessTier(TIERS[tier]);
-
-      // ── Step 5: load current month usage ──
-      const month = new Date().toISOString().slice(0, 7);
-      const { data: usageRow } = await supabase
-        .from("studio_usage")
-        .select("*")
-        .eq("user_id", uid)
-        .eq("month", month)
-        .maybeSingle();
-
-      setUsage({
-        productions_used: usageRow?.productions_used ?? 0,
-        character_grids_used: usageRow?.character_grids_used ?? 0,
-        shot_generations_used: usageRow?.shot_generations_used ?? 0,
-        video_promotions_used: usageRow?.video_promotions_used ?? 0,
+      const { data } = await (supabase as any).auth.getSession();
+      const token = data?.session?.access_token;
+      const resp = await fetch("/api/access-tier", {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
+      const json = await resp.json();
+      if (json.accessTier) setAccessTier(json.accessTier as AccessTier);
+      if (json.usage) setUsage(json.usage as UsageState);
+      if (typeof json.trialUsed === "boolean") setTrialUsed(json.trialUsed);
     } catch (e) {
       console.error("resolveAccess error:", e);
       setAccessTier(TIERS.none);
