@@ -1,11 +1,12 @@
-import { 
-  StoryOption, 
-  Blueprint, 
-  SettingSchema, 
-  MeaningSchema, 
-  Character, 
-  SequenceMap, 
-  BeatSheet 
+import {
+  StoryOption,
+  Blueprint,
+  SettingSchema,
+  MeaningSchema,
+  Character,
+  CharacterStub,
+  SequenceMap,
+  BeatSheet
 } from "../types";
 
 export function getStorySetting(opt: StoryOption): SettingSchema {
@@ -35,6 +36,19 @@ export function getStoryMeaning(opt: StoryOption): MeaningSchema {
     },
     props_sheet: opt.step_3_and_4_meaning_and_props?.props_sheet || []
   };
+}
+
+/** Character roster (stubs) for the option carousel — uses the spine roster if present,
+ *  otherwise derives stubs from any already-generated full characters. */
+export function getCharacterRoster(opt: StoryOption): CharacterStub[] {
+  if (opt.character_roster?.length) return opt.character_roster;
+  return getStoryCharacters(opt).map((c) => ({
+    id: c.id,
+    name: c.identity.name,
+    archetype: c.identity.archetype,
+    cast_orbit: c.identity.cast_orbit,
+    gravity: c.identity.gravity,
+  }));
 }
 
 export function getStoryCharacters(opt: StoryOption): Character[] {

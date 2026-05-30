@@ -154,21 +154,144 @@ app.get("/api/gemini-check", (req, res) => {
 });
 
 // Phase 1: Generate customized story options
+// Distinct McKee "controlling idea" lenses — one per option slot — so each
+// on-demand generation explores a genuinely different narrative direction.
+const PHASE1_DIRECTIONS = [
+  "Lean into psychological realism: suppressed interiority, micro-behaviour, and Stanislavskian subtext. Quiet, precise, character-first.",
+  "Lean into heightened genre tension: external stakes, a ticking-clock pressure cooker, and a propulsive thriller engine driving every beat.",
+  "Lean into tragic irony and moral ambiguity: the protagonist's defining strength is also the exact instrument of their undoing.",
+];
+
+// Shared system prompt for all small JSON generation units — one stable string
+// maximizes ephemeral prompt-cache hits across the many granular calls.
+const JSON_SYSTEM = "You are an elite, award-winning Hollywood screenwriter and script analyst, governed by Robert McKee (Story) and Stanislavskian behavioral subtext. Output ONLY a single raw JSON object — no markdown, no code fences, no prose.";
+
+// Full single-character schema fragment, reused by the on-demand character endpoint.
+const CHARACTER_SCHEMA = `{
+  "id": "char_1",
+  "identity": { "name": "Character Name", "archetype": "E.g., The Saboteur, The Fallen Sentinel", "cast_orbit": "Protagonist (Core Star)", "gravity": "Core narrative goal/purpose", "foil_relationship": "Contrast with other character (e.g., char_2)", "pov": "Reliable or Unreliable Observer status", "scale_class": "Class A [Human] / Class B [Small] / Class C [Massive]", "height": "E.g., 180cm" },
+  "visuals": { "core_body": "Physical description (Age, build, skin tone, features)", "material_texture": "CGI rendering texture keywords (pores, specularity, subsurface scattering)", "wardrobe": { "outer_mask": "Formal attire reflecting public social persona", "inner_vulnerability": "Softer interior apparel details", "accessories": "Key permanent items (e.g. smart rings, tremor devices)" }, "negative_prompt": "Unwanted items to exclude during image rendering" },
+  "kinetics": { "posture": "Physical stance and skeletal arrangement", "weight_distribution": "Body weight allocation during movements", "gait": "Standard walk cycle cadence", "gesture_vocabulary": "Subtle tics, hand adjustments, or nervous habits", "micro_movements": "CGI facial/eye adjustments", "reaction_tempo": "Response latency (e.g., 200ms lag under pressure)" },
+  "cinematics": { "framing": "Optimal framing (e.g., ECU or Medium Close-Up)", "color_palette": ["primary hex", "secondary hex", "climax alert color"], "lighting": "Cinematography key lights" },
+  "audio": {
+    "voice_identity": { "sonic_anchor": "Voice blending (e.g., Cillian Murphy's cold cadence + George Clooney's warm register)", "voice_clone_id": "eleven_labs_voice_preset_or_cloning_seed" },
+    "performance_styling": { "timbre": "Tonal modifiers (gravelly, melodic, soft rasp)", "tempo": "Verbal pacing and presence of dramatic pauses" },
+    "state_telemetry": {
+      "neutral_state": { "stability": 75, "similarity_boost": 75, "style_exaggeration": 15, "stress_cues": "Even breathing, structured articulation" },
+      "tension_state": { "stability": 50, "similarity_boost": 75, "style_exaggeration": 35, "stress_cues": "Slight micro-pauses, swallowing hard between sentences" },
+      "panic_state": { "stability": 30, "similarity_boost": 75, "style_exaggeration": 65, "stress_cues": "Voice cracking under strain, shallow rapid exhalations" }
+    },
+    "monologue_script": "A 15-20 second monologue script explaining the character's worldview"
+  },
+  "psychology": { "social": "Public mask", "personal": "True personality traits", "core": "Underlying motivation center", "hidden": "Hidden trauma or repression" },
+  "metrics": { "personality": { "openness": 70, "conscientiousness": 80, "extraversion": 40, "agreeableness": 50, "neuroticism": 60 }, "quotients": { "iq": 120, "eq": 100, "pq": 90, "cq": 110 } },
+  "motivation": { "drive": "Primal drive state", "signature_move": "Unique cognitive adjustment tactic", "litmus_test": "Action synthesis formula", "conscious_desire": "The Spine", "unconscious_need": "The contradiction", "empathy_hook": "Core piece of vulnerability", "dilemma_type": "Irreconcilable Goods / Lesser of Evils", "dilemma_desc": "Main climax dilemma description", "cinematic_proof": "Brief physical scene depicting signature tactic" },
+  "arc": { "trajectory": "The trajectory path", "step_1_preparation": "Initial unexpressed void", "step_2_revelation": "Mask stripped detail", "step_3_change": "Transition events", "step_4_completion": "Fulfillment action" },
+  "prompts": { "master_visual_reference": { "character_name": "Character Name", "core_keywords_used": "Body + material keywords", "master_grid_prompt": "One concise sentence: a 16:9 character reference-sheet image prompt built from the body + material + wardrobe; photorealistic, film production quality." } }
+}`;
+
+// ── Phase 1a: option SPINE (title + setting + meaning + character roster stubs) ──
+// Small (~2k tokens) so it clears the rate limit instantly. Full character bibles
+// are fetched separately, on demand, via /api/phase1-character.
+app.post("/api/phase1-spine", async (req, res) => {
+  const { customizedPremise, optionIndex } = req.body;
+  const idx = Math.min(Math.max(Number(optionIndex) || 0, 0), PHASE1_DIRECTIONS.length - 1);
+  const targetPremise = customizedPremise || "What if a high-ranking corporate saboteur is forced to execute a quiet chemical poisoning during a high-stakes dinner inside a smart, hermetic greenhouse that visually manifests human stress hormones?";
+
+  try {
+    const prompt = `We are in PHASE 1: THE COSMOLOGY & THE DIGITAL ACTORS of a short film pipeline.
+
+Premise:
+"${targetPremise}"
+
+Generate ONE distinct narrative direction. CREATIVE DIRECTION: ${PHASE1_DIRECTIONS[idx]}
+
+Output a SINGLE raw JSON object — the option SPINE ONLY. Do NOT write full character bibles; only a roster of 2-4 character stubs. Schema:
+
+{
+  "option_id": ${idx + 1},
+  "title": "Evocative story title",
+  "setting": {
+    "dimensions": { "period": "...", "duration": "...", "location": "...", "conflict_level": "..." },
+    "creative_limitation": "The single hard constraint that focuses the drama"
+  },
+  "meaning": {
+    "premise": "What if...",
+    "controlling_idea": "Value + Cause (how the climax resolves the central value)",
+    "dialectical_debate": { "positive_idea": "Belief validating the protagonist's mask", "negative_counter_idea": "Opposing truth forcing vulnerability" },
+    "props_sheet": [ { "name": "Prop", "description": "How it acts as an interactive narrative catalyst" } ]
+  },
+  "character_roster": [
+    { "id": "char_1", "name": "Name", "archetype": "Dramatic archetype function", "cast_orbit": "Protagonist (Core Star) / First Circle Foil / Utility", "gravity": "One-line core narrative purpose" }
+  ]
+}
+
+Reject surface tropes and empty exposition. Output ONLY the raw JSON object.`;
+
+    const model = await modelForRequest(req);
+    const text = await generateWithClaude({ model, system: JSON_SYSTEM, prompt, maxTokens: 3000, timeoutMs: 60_000 });
+    if (!text) throw new Error("Empty response from Claude.");
+    const spine = JSON.parse(cleanJSONString(text));
+    spine.option_id = idx + 1; // enforce the requested slot id
+    res.json({ success: true, spine });
+  } catch (error: any) {
+    console.error(`Claude Phase 1 spine ${idx + 1} failed:`, error.message);
+    res.status(200).json({ success: false, error: error.message, message: "Could not generate this direction (rate limit or backend issue). Try again." });
+  }
+});
+
+// ── Phase 1b: ONE full character bible, on demand ──
+app.post("/api/phase1-character", async (req, res) => {
+  const { premise, spine, characterId } = req.body;
+  if (!characterId) return res.status(400).json({ success: false, message: "characterId is required." });
+
+  try {
+    const rosterEntry = (spine?.character_roster || []).find((c: any) => c.id === characterId);
+    const prompt = `We are in PHASE 1 of a short film pipeline. Locked story spine for context (setting, meaning, character roster):
+${JSON.stringify({ premise: premise || spine?.meaning?.premise, title: spine?.title, setting: spine?.setting, meaning: spine?.meaning, character_roster: spine?.character_roster }, null, 2)}
+
+Expand ONLY character "${characterId}"${rosterEntry ? ` (name: ${rosterEntry.name}, archetype: ${rosterEntry.archetype})` : ""} into the FULL character bible, consistent with the spine and roster.
+
+Keep EVERY field to one tight, concrete sentence — vivid but no padding or repetition.
+
+Output a SINGLE raw JSON object matching this exact character schema (keep "id" exactly "${characterId}"):
+
+${CHARACTER_SCHEMA}
+
+Output ONLY the raw JSON object.`;
+
+    const model = await modelForRequest(req);
+    const text = await generateWithClaude({ model, system: JSON_SYSTEM, prompt, maxTokens: 4000, timeoutMs: 110_000 });
+    if (!text) throw new Error("Empty response from Claude.");
+    const character = JSON.parse(cleanJSONString(text));
+    character.id = characterId; // enforce stable id
+    character._generated = true;
+    res.json({ success: true, character });
+  } catch (error: any) {
+    console.error(`Claude Phase 1 character ${characterId} failed:`, error.message);
+    res.status(200).json({ success: false, error: error.message, message: "Could not generate this character (rate limit or backend issue). Try again." });
+  }
+});
+
+// Legacy whole-option Phase 1 endpoint (kept as a fallback; the frontend now uses
+// /api/phase1-spine + /api/phase1-character for granular, rate-limit-friendly generation).
 app.post("/api/generate-phase1", async (req, res) => {
-  const { customizedPremise } = req.body;
+  const { customizedPremise, optionIndex } = req.body;
+  const idx = Math.min(Math.max(Number(optionIndex) || 0, 0), PHASE1_DIRECTIONS.length - 1);
   const targetPremise = customizedPremise || "What if a high-ranking corporate saboteur is forced to execute a quiet chemical poisoning during a high-stakes dinner inside a smart, hermetic greenhouse that visually manifests human stress hormones?";
 
   try {
     const prompt = `You are an elite, award-winning Hollywood screenwriter and script analyst. Your creative process is strictly governed by the narrative architecture of Robert McKee (Story) and Stanislavskian behavioral subtext.
 
-We are starting PHASE 1: THE COSMOLOGY & THE DIGITAL ACTORS of our short film pipeline.
+We are in PHASE 1: THE COSMOLOGY & THE DIGITAL ACTORS of our short film pipeline.
 
 Analyze the following premise:
 "${targetPremise}"
 
-Generate THREE distinct narrative directions for this setup. For each option, output a raw, well-structured JSON array matching this exact structural schema:
+Generate ONE distinct narrative direction for this premise. CREATIVE DIRECTION FOR THIS OPTION: ${PHASE1_DIRECTIONS[idx]}
 
-[
+Output a SINGLE raw, well-structured JSON object matching this exact structural schema:
+
   {
     "option_id": 1,
     "title": "Story Title Here",
@@ -298,30 +421,31 @@ Generate THREE distinct narrative directions for this setup. For each option, ou
       }
     ]
   }
-]
 
-Reject all surface-level tropes and empty exposition. Output ONLY the raw JSON. Do not include markdown wraps or prefixing.`;
+Reject all surface-level tropes and empty exposition. Output ONLY the raw JSON object. Do not include markdown wraps or prefixing.`;
 
     const model = await modelForRequest(req);
     const text = await generateWithClaude({
       model,
-      system: "You are an elite, award-winning Hollywood screenwriter and script analyst. Your creative process is strictly governed by the narrative architecture of Robert McKee (Story) and Stanislavskian behavioral subtext. Output ONLY raw JSON — no markdown, no code fences, no explanation.",
+      system: "You are an elite, award-winning Hollywood screenwriter and script analyst. Your creative process is strictly governed by the narrative architecture of Robert McKee (Story) and Stanislavskian behavioral subtext. Output ONLY a single raw JSON object — no markdown, no code fences, no explanation.",
       prompt,
-      maxTokens: 32000,
+      maxTokens: 16000,
+      timeoutMs: 110_000,
     });
 
     if (!text) {
       throw new Error("Empty response from Claude.");
     }
 
-    const parsed = JSON.parse(cleanJSONString(text));
-    res.json({ success: true, options: parsed });
+    const option = JSON.parse(cleanJSONString(text));
+    option.option_id = idx + 1; // enforce the requested slot id
+    res.json({ success: true, option });
   } catch (error: any) {
-    console.error("Claude Phase 1 generation failed:", error.message);
+    console.error(`Claude Phase 1 option ${idx + 1} generation failed:`, error.message);
     res.status(200).json({
       success: false,
       error: error.message,
-      message: "Could not talk to AI backend or API key is missing. Loading pre-seeded options.",
+      message: "Could not generate this option (rate limit or backend issue). Try again.",
     });
   }
 });

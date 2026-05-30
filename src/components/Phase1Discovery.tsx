@@ -1,13 +1,13 @@
 import { useState, useEffect } from "react";
-import { StoryOption } from "../types";
+import { StoryOption, Character } from "../types";
 import { PRESEEDED_OPTIONS } from "../preseededData";
 import { getAuthHeader } from "../lib/authHeader";
 import {
   Sparkles, ArrowRight, Edit3, CheckCircle, Volume2,
-  Fingerprint, Sliders, Copy, ChevronLeft, ChevronRight
+  Fingerprint, Sliders, Copy, ChevronLeft, ChevronRight, Loader2
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
-import { getStorySetting, getStoryMeaning, getStoryCharacters } from "../utils/schemaConverter";
+import { getStorySetting, getStoryMeaning, getStoryCharacters, getCharacterRoster } from "../utils/schemaConverter";
 
 interface Phase1DiscoveryProps {
   onSelectOption: (option: StoryOption) => void;
@@ -21,9 +21,11 @@ export function Phase1Discovery({ onSelectOption, onLockOption, selectedOptionId
     "What if a high-ranking corporate saboteur is forced to execute a quiet chemical poisoning during a high-stakes dinner inside a smart, hermetic greenhouse that visually manifests human stress hormones?"
   );
   const [isEditingPremise, setIsEditingPremise] = useState(false);
-  const [options, setOptions] = useState<StoryOption[]>(PRESEEDED_OPTIONS);
+  const OPTION_IDS = [1, 2, 3];
+  const [options, setOptions] = useState<StoryOption[]>([{ ...PRESEEDED_OPTIONS[0], option_id: 1 }]);
   const [activeOptionId, setActiveOptionId] = useState<number>(selectedOptionId || 1);
-  const [isLoading, setIsLoading] = useState(false);
+  const [loadingOptionId, setLoadingOptionId] = useState<number | null>(null);
+  const [loadingCharId, setLoadingCharId] = useState<string | null>(null);
   const [errorInfo, setErrorInfo] = useState<string | null>(null);
 
   const [playingMonologueCharId, setPlayingMonologueCharId] = useState<string | null>(null);
@@ -44,34 +46,66 @@ export function Phase1Discovery({ onSelectOption, onLockOption, selectedOptionId
     setActiveCharIndex(0);
   }, [activeOptionId]);
 
-  const handleGenerateOptions = async () => {
-    setIsLoading(true);
+  // Generate ONE option on demand (Option 1 by default; Options 2 & 3 when the
+  // user clicks their tab). One option per request stays under the rate limit
+  // while keeping the full schema. The current view stays put until it's ready.
+  const handleGenerateOption = async (targetId: number) => {
+    if (loadingOptionId !== null) return;
+    setLoadingOptionId(targetId);
     setErrorInfo(null);
     try {
-      const resp = await fetch("/api/generate-phase1", {
+      const resp = await fetch("/api/phase1-spine", {
         method: "POST",
         headers: { "Content-Type": "application/json", ...(await getAuthHeader()) },
-        body: JSON.stringify({ customizedPremise: premise }),
+        body: JSON.stringify({ customizedPremise: premise, optionIndex: targetId - 1 }),
       });
       const data = await resp.json();
-      if (data.success && data.options && Array.isArray(data.options)) {
-        const newOptions = data.options;
-        setOptions(newOptions);
+      if (data.success && data.spine) {
+        const newOpt: StoryOption = { ...data.spine, option_id: targetId };
+        setOptions((prev) => {
+          const others = prev.filter((o) => o.option_id !== targetId);
+          return [...others, newOpt].sort((a, b) => a.option_id - b.option_id);
+        });
+        setActiveOptionId(targetId);
         setActiveCharIndex(0);
-        const first = newOptions[0];
-        if (first) {
-          setActiveOptionId(first.option_id);
-          onSelectOption(first);
-        }
+        onSelectOption(newOpt);
       } else {
-        setErrorInfo(data.message || "Failed to generate. Loaded pre-seeded high-fidelity targets.");
-        setOptions(PRESEEDED_OPTIONS);
+        setErrorInfo(data.message || "Failed to generate this direction.");
       }
     } catch {
       setErrorInfo("Could not connect to the server. Ensure it is active and secrets are loaded.");
-      setOptions(PRESEEDED_OPTIONS);
     } finally {
-      setIsLoading(false);
+      setLoadingOptionId(null);
+    }
+  };
+
+  // Generate ONE full character bible on demand and merge it into the active option.
+  const handleGenerateCharacter = async (characterId: string) => {
+    if (loadingCharId !== null) return;
+    const targetOpt = options.find((o) => o.option_id === activeOptionId);
+    if (!targetOpt) return;
+    setLoadingCharId(characterId);
+    setErrorInfo(null);
+    try {
+      const resp = await fetch("/api/phase1-character", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(await getAuthHeader()) },
+        body: JSON.stringify({ premise, optionIndex: targetOpt.option_id - 1, spine: targetOpt, characterId }),
+      });
+      const data = await resp.json();
+      if (data.success && data.character) {
+        const fullChar: Character = { ...data.character, id: characterId, _generated: true };
+        const others = (targetOpt.characters || []).filter((c) => c.id !== characterId);
+        const merged: StoryOption = { ...targetOpt, characters: [...others, fullChar] };
+        setOptions((prev) => prev.map((o) => (o.option_id === merged.option_id ? merged : o)));
+        onSelectOption(merged);
+      } else {
+        setErrorInfo(data.message || "Failed to generate this character.");
+      }
+    } catch {
+      setErrorInfo("Could not connect to the server. Ensure it is active and secrets are loaded.");
+    } finally {
+      setLoadingCharId(null);
     }
   };
 
@@ -81,7 +115,11 @@ export function Phase1Discovery({ onSelectOption, onLockOption, selectedOptionId
   const setting = getStorySetting(opt);
   const meaning = getStoryMeaning(opt);
   const characters = getStoryCharacters(opt);
-  const char = characters[activeCharIndex] || characters[0];
+  const roster = getCharacterRoster(opt);
+  const activeStub = roster[activeCharIndex] || roster[0];
+  const char = activeStub
+    ? characters.find((c) => c.id === activeStub.id)
+    : characters[activeCharIndex] || characters[0];
 
   return (
     <div className="space-y-4">
@@ -102,12 +140,12 @@ export function Phase1Discovery({ onSelectOption, onLockOption, selectedOptionId
               {isEditingPremise ? "Lock" : "Customize"}
             </button>
             <button
-              onClick={handleGenerateOptions}
-              disabled={isLoading}
+              onClick={() => handleGenerateOption(activeOptionId)}
+              disabled={loadingOptionId !== null}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-orange-600 hover:bg-orange-500 disabled:opacity-50 text-[11px] text-white font-mono font-bold transition-all cursor-pointer shadow-md shadow-orange-950/40"
             >
-              <Sparkles className="w-3 h-3" />
-              {isLoading ? "Consulting AI…" : "Re-generate"}
+              {loadingOptionId === activeOptionId ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
+              {loadingOptionId === activeOptionId ? "Consulting AI…" : `Re-generate Option 0${activeOptionId}`}
             </button>
           </div>
         </div>
@@ -138,20 +176,30 @@ export function Phase1Discovery({ onSelectOption, onLockOption, selectedOptionId
           <p className="font-sans text-[11px] text-slate-400 mt-0.5">Pick a direction below, then lock it in to continue.</p>
         </div>
         <div className="flex items-center gap-1.5 bg-black/40 p-1 rounded-xl border border-white/10 shrink-0">
-          {options.map((o) => {
-            const isActive = activeOptionId === o.option_id;
-            const isSel = selectedOptionId === o.option_id;
+          {OPTION_IDS.map((id) => {
+            const existing = options.find((o) => o.option_id === id);
+            const isActive = activeOptionId === id && !!existing;
+            const isSel = selectedOptionId === id;
+            const isGenerating = loadingOptionId === id;
             return (
               <button
-                key={o.option_id}
-                onClick={() => { setActiveOptionId(o.option_id); onSelectOption(o); }}
-                className={`px-3 py-1.5 rounded-lg font-mono text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                key={id}
+                disabled={loadingOptionId !== null}
+                onClick={() => {
+                  if (existing) { setActiveOptionId(id); onSelectOption(existing); }
+                  else { handleGenerateOption(id); }
+                }}
+                title={existing ? `View Option 0${id}` : `Generate a new direction for Option 0${id}`}
+                className={`px-3 py-1.5 rounded-lg font-mono text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1.5 disabled:opacity-60 ${
                   isActive
                     ? "bg-orange-600 text-white shadow-md"
-                    : "text-slate-300 hover:text-white hover:bg-white/8"
+                    : existing
+                    ? "text-slate-300 hover:text-white hover:bg-white/8"
+                    : "text-slate-500 border border-dashed border-white/15 hover:text-white hover:bg-white/5"
                 }`}
               >
-                Option 0{o.option_id}
+                {isGenerating ? <Loader2 className="w-3 h-3 animate-spin" /> : (!existing && <Sparkles className="w-3 h-3" />)}
+                Option 0{id}
                 {isSel && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />}
               </button>
             );
@@ -316,7 +364,7 @@ export function Phase1Discovery({ onSelectOption, onLockOption, selectedOptionId
                 <span className="font-mono text-[9px] text-slate-400 tracking-widest uppercase font-bold">
                   Characters & Voice Settings
                 </span>
-                {characters.length > 1 && (
+                {roster.length > 1 && (
                   <div className="flex items-center gap-1.5">
                     <button
                       onClick={() => setActiveCharIndex((i) => Math.max(0, i - 1))}
@@ -325,22 +373,28 @@ export function Phase1Discovery({ onSelectOption, onLockOption, selectedOptionId
                     >
                       <ChevronLeft className="w-3.5 h-3.5 text-slate-200" />
                     </button>
-                    {characters.map((c, i) => (
-                      <button
-                        key={c.id}
-                        onClick={() => setActiveCharIndex(i)}
-                        className={`px-2.5 py-1 rounded font-mono text-[10px] font-bold transition-all cursor-pointer border ${
-                          activeCharIndex === i
-                            ? "bg-white/15 border-white/25 text-white"
-                            : "bg-black/50 border-white/15 text-slate-300 hover:text-white hover:border-white/30"
-                        }`}
-                      >
-                        {c.identity.name || `Char ${i + 1}`}
-                      </button>
-                    ))}
+                    {roster.map((c, i) => {
+                      const generated = characters.some((fc) => fc.id === c.id);
+                      return (
+                        <button
+                          key={c.id}
+                          onClick={() => setActiveCharIndex(i)}
+                          className={`px-2.5 py-1 rounded font-mono text-[10px] font-bold transition-all cursor-pointer border flex items-center gap-1 ${
+                            activeCharIndex === i
+                              ? "bg-white/15 border-white/25 text-white"
+                              : "bg-black/50 border-white/15 text-slate-300 hover:text-white hover:border-white/30"
+                          }`}
+                        >
+                          {loadingCharId === c.id
+                            ? <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                            : generated && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />}
+                          {c.name || `Char ${i + 1}`}
+                        </button>
+                      );
+                    })}
                     <button
-                      onClick={() => setActiveCharIndex((i) => Math.min(characters.length - 1, i + 1))}
-                      disabled={activeCharIndex === characters.length - 1}
+                      onClick={() => setActiveCharIndex((i) => Math.min(roster.length - 1, i + 1))}
+                      disabled={activeCharIndex === roster.length - 1}
                       className="p-1 rounded border border-white/15 bg-white/5 hover:bg-white/10 disabled:opacity-25 transition-all cursor-pointer"
                     >
                       <ChevronRight className="w-3.5 h-3.5 text-slate-200" />
@@ -348,6 +402,28 @@ export function Phase1Discovery({ onSelectOption, onLockOption, selectedOptionId
                   </div>
                 )}
               </div>
+
+              {/* Stub card — shown when the full bible hasn't been generated yet */}
+              {!char && activeStub && (
+                <div className="bg-black/50 p-4 rounded-2xl border border-dashed border-white/15 text-xs space-y-3">
+                  <div className="flex justify-between items-center pb-2.5 border-b border-white/8">
+                    <div>
+                      <span className="text-[9px] font-mono text-slate-400 uppercase tracking-widest block mb-0.5">{activeStub.cast_orbit}</span>
+                      <span className="font-bold text-white text-sm tracking-tight">{activeStub.name}</span>
+                    </div>
+                    <span className="text-[9px] font-mono px-2.5 py-1 rounded bg-white/5 border border-white/15 text-slate-400 uppercase tracking-widest">{activeStub.archetype}</span>
+                  </div>
+                  <p className="text-slate-400 text-[11px] leading-relaxed">{activeStub.gravity}</p>
+                  <button
+                    onClick={() => handleGenerateCharacter(activeStub.id)}
+                    disabled={loadingCharId !== null}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-orange-600 hover:bg-orange-500 disabled:opacity-50 text-[11px] text-white font-mono font-bold transition-all cursor-pointer"
+                  >
+                    {loadingCharId === activeStub.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+                    {loadingCharId === activeStub.id ? "Fleshing out character…" : "Generate full profile"}
+                  </button>
+                </div>
+              )}
 
               {/* Single character card */}
               {char && (

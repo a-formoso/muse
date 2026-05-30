@@ -174,6 +174,17 @@ export interface Character {
   prompts: {
     master_visual_reference: MasterVisualReference;
   };
+  /** true once the full bible has been generated on demand (vs. a roster stub). */
+  _generated?: boolean;
+}
+
+/** Lightweight character entry from the Phase-1 spine; full bible fetched on demand. */
+export interface CharacterStub {
+  id: string;
+  name: string;
+  archetype: string;
+  cast_orbit: string;
+  gravity: string;
 }
 
 export interface SettingSchema {
@@ -198,6 +209,8 @@ export interface StoryOption {
   setting?: SettingSchema;
   meaning?: MeaningSchema;
   characters?: Character[];
+  /** Roster of character stubs from the spine; full bibles loaded into `characters` on demand. */
+  character_roster?: CharacterStub[];
 }
 
 export interface Scene {
