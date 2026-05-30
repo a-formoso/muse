@@ -450,7 +450,118 @@ Reject all surface-level tropes and empty exposition. Output ONLY the raw JSON o
   }
 });
 
-// Phase 2: Generate Blueprint from Selected Option
+// ── Phase 2a: structural blueprint (acts → sequences → scenes + logline, NO beats) ──
+// Small/fast; beats are generated per-scene on demand via /api/phase2-beats.
+app.post("/api/phase2-structure", async (req, res) => {
+  const { chosenOption } = req.body;
+  if (!chosenOption) return res.status(400).json({ success: false, message: "Missing chosenOption." });
+
+  try {
+    const roster = chosenOption.character_roster || (chosenOption.characters || []).map((c: any) => ({ id: c.id, name: c.identity?.name, archetype: c.identity?.archetype }));
+    const prompt = `PHASE 2: PRE-PRODUCTION BLUEPRINT & STRUCTURAL SCENE DESIGN.
+Expand this story direction into a tight, proportional 3-act framework (Act One / Two / Three). No "story vacuums" in Act 1 or Act 3. Reference characters by id (char_1, ...).
+
+Locked Phase 1 direction:
+${JSON.stringify({ title: chosenOption.title, setting: chosenOption.setting, meaning: chosenOption.meaning, character_roster: roster }, null, 2)}
+
+Output the STRUCTURE ONLY — sequences with scenes and a master logline. Do NOT generate beats (produced separately per scene). Keep it tight: 1-2 sequences per act, 1-3 scenes per sequence, and every field to one concise sentence.
+
+Output a SINGLE raw JSON object:
+{
+  "sequences": {
+    "act_one_sequences": [ { "sequence_id": "A1_S1", "act": "ACT ONE", "actLabel": "Set-Up", "title": "Sequence title", "setting_macro": "Location", "themeFocus": "E.g. Control - Isolation", "dramatic_arc": "Value shift", "scenes": [ { "scene_number": 1, "setting_micro": "E.g. Boardroom Chair - ECU", "scene_objective": "What char_1 physically wants", "opening_value": "Starting value", "closing_value": "Ending value", "narrative_action": "Action opening the gap", "visualDesc": "Stylistic layout of the setting" } ] } ],
+    "act_two_sequences": [ /* same shape; sequence_id A2_S1...; act "ACT TWO"; actLabel "Confrontation" */ ],
+    "act_three_sequences": [ /* same shape; sequence_id A3_S1...; act "ACT THREE"; actLabel "Resolution" */ ]
+  },
+  "logline": "One high-velocity McKee master logline: protagonist, inciting incident, spine, central ironic stakes."
+}
+
+Output ONLY the raw JSON object.`;
+
+    const model = await modelForRequest(req);
+    const text = await generateWithClaude({ model, system: JSON_SYSTEM, prompt, maxTokens: 5000, timeoutMs: 105_000 });
+    if (!text) throw new Error("Empty response from Claude.");
+    const structure = JSON.parse(cleanJSONString(text));
+    const blueprint = {
+      title: chosenOption.title,
+      setting: chosenOption.setting,
+      meaning: chosenOption.meaning,
+      characters: chosenOption.characters || [],
+      sequences: structure.sequences,
+      logline: structure.logline,
+      beats: [],
+      _structureGenerated: true,
+    };
+    res.json({ success: true, blueprint });
+  } catch (error: any) {
+    console.error("Claude Phase 2 structure failed:", error.message);
+    res.status(200).json({ success: false, error: error.message, message: "Could not generate the blueprint structure (rate limit or backend issue). Try again." });
+  }
+});
+
+// ── Phase 2b: one scene's beat progression (3-5 beats), trimmed context ──
+app.post("/api/phase2-beats", async (req, res) => {
+  const { blueprint, sequenceId, sceneNumber } = req.body;
+  if (!sequenceId || sceneNumber == null) return res.status(400).json({ success: false, message: "sequenceId and sceneNumber are required." });
+
+  try {
+    const allSeqs = [
+      ...(blueprint?.sequences?.act_one_sequences || []),
+      ...(blueprint?.sequences?.act_two_sequences || []),
+      ...(blueprint?.sequences?.act_three_sequences || []),
+    ];
+    const seq = allSeqs.find((s: any) => s.sequence_id === sequenceId);
+    const scene = (seq?.scenes || []).find((sc: any) => sc.scene_number === Number(sceneNumber));
+    const charDigest = (blueprint?.characters || []).map((c: any) => ({
+      id: c.id,
+      name: c.identity?.name,
+      archetype: c.identity?.archetype,
+      stress_cues: {
+        neutral_state: c.audio?.state_telemetry?.neutral_state?.stress_cues,
+        tension_state: c.audio?.state_telemetry?.tension_state?.stress_cues,
+        panic_state: c.audio?.state_telemetry?.panic_state?.stress_cues,
+      },
+    }));
+
+    const prompt = `PHASE 2 beat design for ONE scene.
+Controlling idea: ${blueprint?.meaning?.controlling_idea || ""}
+Sequence ${sequenceId} (${seq?.title || ""}): theme "${seq?.themeFocus || ""}"; arc "${seq?.dramatic_arc || ""}"; setting "${seq?.setting_macro || ""}".
+Target scene: ${JSON.stringify(scene || { scene_number: Number(sceneNumber) })}
+Characters (with vocal stress cues): ${JSON.stringify(charDigest)}
+
+Generate the subtextual beat progression (3-5 beats) for THIS scene only. Each beat: an active CAPITALIZED gerund subtext tag in "action" (referencing a character id), a foil "reaction", a spoken mask "text" line, a "vocal_state" (neutral_state / tension_state / panic_state), a somatic "status", and "visual_flora". Keep every field to one tight sentence.
+
+Output a SINGLE raw JSON object:
+{
+  "target_sequence_id": "${sequenceId}",
+  "scene_number": ${Number(sceneNumber)},
+  "micro_blueprint": {
+    "scene_objective": "Scene objective",
+    "opening_value": "Opening value status",
+    "closing_value": "Closing value status",
+    "subtextual_beat_progression": [
+      { "beat_number": 1, "action": "char_1: FEIGNING ACCOUNTABILITY while turning his signet ring", "reaction": "char_2: MANAGING THE TRAP, tracking his hands", "text": "spoken mask line", "vocal_state": "tension_state", "status": "psychological tension; somatic tremor", "visual_flora": "flora colour reacting to stress" }
+    ]
+  }
+}
+
+Output ONLY the raw JSON object.`;
+
+    const model = await modelForRequest(req);
+    const text = await generateWithClaude({ model, system: JSON_SYSTEM, prompt, maxTokens: 2500, timeoutMs: 70_000 });
+    if (!text) throw new Error("Empty response from Claude.");
+    const beatSheet = JSON.parse(cleanJSONString(text));
+    beatSheet.target_sequence_id = sequenceId; // enforce ids
+    beatSheet.scene_number = Number(sceneNumber);
+    res.json({ success: true, beatSheet });
+  } catch (error: any) {
+    console.error(`Claude Phase 2 beats ${sequenceId}:${sceneNumber} failed:`, error.message);
+    res.status(200).json({ success: false, error: error.message, message: "Could not generate beats for this scene. Try again." });
+  }
+});
+
+// Legacy whole-blueprint Phase 2 endpoint (fallback; the frontend now uses
+// /api/phase2-structure + /api/phase2-beats for granular generation).
 app.post("/api/generate-phase2", async (req, res) => {
   const { chosenOption } = req.body;
 

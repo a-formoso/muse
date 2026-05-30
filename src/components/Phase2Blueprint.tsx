@@ -5,7 +5,7 @@ import { getAuthHeader } from "../lib/authHeader";
 import { GreenhouseVisualizer } from "./GreenhouseVisualizer";
 import {
   Sparkles, ArrowRight, ChevronLeft, ChevronRight, ChevronDown,
-  Volume2, Film, Palette, Music, CheckCircle
+  Volume2, Film, Palette, Music, CheckCircle, Loader2
 } from "lucide-react";
 import { StoryboardPanel } from "./StoryboardPanel";
 import { StylePresetPanel } from "./StylePresetPanel";
@@ -39,6 +39,7 @@ const ACT_COLORS  = [
 export function Phase2Blueprint({ chosenOption, onSelectBlueprint, selectedBlueprint }: Phase2BlueprintProps) {
   const [blueprint, setBlueprint]         = useState<Blueprint>(selectedBlueprint || PRESEEDED_BLUEPRINT);
   const [isLoading, setIsLoading]         = useState(false);
+  const [loadingSceneKey, setLoadingSceneKey] = useState<string | null>(null);
   const [errorInfo, setErrorInfo]         = useState<string | null>(null);
 
   // Navigation state
@@ -59,7 +60,7 @@ export function Phase2Blueprint({ chosenOption, onSelectBlueprint, selectedBluep
     if (!chosenOption) return;
     setIsLoading(true); setErrorInfo(null);
     try {
-      const resp = await fetch("/api/generate-phase2", {
+      const resp = await fetch("/api/phase2-structure", {
         method: "POST", headers: { "Content-Type": "application/json", ...(await getAuthHeader()) },
         body: JSON.stringify({ chosenOption }),
       });
@@ -75,6 +76,31 @@ export function Phase2Blueprint({ chosenOption, onSelectBlueprint, selectedBluep
       setErrorInfo("AI endpoint unreachable. Rendered preseeded maps.");
       setBlueprint(PRESEEDED_BLUEPRINT); onSelectBlueprint(PRESEEDED_BLUEPRINT);
     } finally { setIsLoading(false); }
+  };
+
+  // Generate ONE scene's beat progression on demand and merge it into the blueprint.
+  const handleGenerateSceneBeats = async (sequenceId: string, sceneNumber: number) => {
+    const key = `${sequenceId}:${sceneNumber}`;
+    if (loadingSceneKey) return;
+    setLoadingSceneKey(key); setErrorInfo(null);
+    try {
+      const resp = await fetch("/api/phase2-beats", {
+        method: "POST", headers: { "Content-Type": "application/json", ...(await getAuthHeader()) },
+        body: JSON.stringify({ blueprint, sequenceId, sceneNumber }),
+      });
+      const data = await resp.json();
+      if (data.success && data.beatSheet) {
+        const bs: BeatSheet = { ...data.beatSheet, target_sequence_id: sequenceId, scene_number: sceneNumber };
+        const existing = getBlueprintBeats(blueprint);
+        const others = existing.filter(b => !(b.target_sequence_id === sequenceId && b.scene_number === sceneNumber));
+        const merged: Blueprint = { ...blueprint, beats: [...others, bs] };
+        setBlueprint(merged); onSelectBlueprint(merged);
+      } else {
+        setErrorInfo(data.message || "Could not generate beats for this scene.");
+      }
+    } catch {
+      setErrorInfo("AI endpoint unreachable.");
+    } finally { setLoadingSceneKey(null); }
   };
 
   const resetNav = () => {
@@ -512,7 +538,19 @@ export function Phase2Blueprint({ chosenOption, onSelectBlueprint, selectedBluep
                   <div className="space-y-2">
                     <span className="font-mono text-[9px] text-slate-500 uppercase tracking-widest block">Beat Progression</span>
                     {beats.length === 0 ? (
-                      <p className="text-[11px] text-slate-600 italic font-mono py-4 text-center">Generate with Claude.</p>
+                      activeSeq && activeScene ? (
+                        <button
+                          onClick={() => handleGenerateSceneBeats(activeSeq.sequence_id, activeScene.scene_number)}
+                          disabled={loadingSceneKey !== null}
+                          className="flex items-center gap-1.5 w-full justify-center py-3 rounded-lg bg-orange-600 hover:bg-orange-500 disabled:opacity-50 text-[11px] text-white font-mono font-bold transition-all cursor-pointer"
+                        >
+                          {loadingSceneKey === `${activeSeq.sequence_id}:${activeScene.scene_number}`
+                            ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Designing beats…</>
+                            : <><Sparkles className="w-3.5 h-3.5" /> Generate beats for this scene</>}
+                        </button>
+                      ) : (
+                        <p className="text-[11px] text-slate-600 italic font-mono py-4 text-center">Select a scene to design its beats.</p>
+                      )
                     ) : (
                       <>
                         {(beatsExpanded ? beats : beats.slice(0, 2)).map((beat, bi) => {
