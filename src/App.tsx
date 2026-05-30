@@ -38,6 +38,18 @@ const PHASE_TO_STATUS: Record<Phase, Production["status"]> = {
   4: "visuals", 5: "shots", 6: "assembly",
 };
 
+// ── Phase-1 multi-option persistence helpers ──
+// We persist ALL generated options by embedding them as `_all_options` on the saved
+// (selected) story_data option. `stripAll` keeps the array elements flat (no nesting).
+const stripAll = (o: StoryOption): StoryOption => {
+  if (!(o as { _all_options?: StoryOption[] })._all_options) return o;
+  const clone = { ...o } as StoryOption & { _all_options?: StoryOption[] };
+  delete clone._all_options;
+  return clone;
+};
+const embedAll = (sel: StoryOption | null | undefined, all: StoryOption[]): StoryOption | null =>
+  sel ? { ...stripAll(sel), _all_options: all.map(stripAll) } : null;
+
 export default function App() {
   const { user, loading, accessTier, usage, signOut, refreshAccess } = useAuth();
   const { theme, toggle: toggleTheme } = useTheme();
@@ -48,6 +60,10 @@ export default function App() {
   // Production state
   const [activePhase, setActivePhase] = useState<Phase>(1);
   const [selectedOption, setSelectedOption] = useState<StoryOption>(PRESEEDED_OPTIONS[0]);
+  // All generated Phase-1 options (persisted so reload/resume keeps every option + character).
+  const [storyOptions, setStoryOptions] = useState<StoryOption[]>([{ ...PRESEEDED_OPTIONS[0], option_id: PRESEEDED_OPTIONS[0].option_id ?? 1 }]);
+  // Bumped on new/resume to remount Phase1Discovery so it re-hydrates from storyOptions.
+  const [productionKey, setProductionKey] = useState(0);
   const [lockedOptionId, setLockedOptionId] = useState<number>(PRESEEDED_OPTIONS[0].option_id);
   const [selectedBlueprint, setSelectedBlueprint] = useState<Blueprint>(PRESEEDED_BLUEPRINT);
   const [scriptText, setScriptText] = useState<string>(PRESEEDED_SCRIPT);
@@ -78,26 +94,32 @@ export default function App() {
       const newId = await saveProduction(user.id, productionId, {
         title,
         status: PHASE_TO_STATUS[phase],
-        story_data: selectedOption,
+        story_data: embedAll(selectedOption, storyOptions),
         blueprint_data: selectedBlueprint,
         screenplay_text: scriptText,
         ...overrides,
       });
       if (newId && !productionId) setProductionId(newId);
     }, 1200);
-  }, [user, productionId, productionTitle, selectedOption, selectedBlueprint, scriptText]);
+  }, [user, productionId, productionTitle, selectedOption, storyOptions, selectedBlueprint, scriptText]);
 
   // ── Resume production ──
   const handleResume = useCallback((prod: Production) => {
     setProductionId(prod.id);
     setProductionTitle(prod.title || "");
-    if (prod.story_data) setSelectedOption(prod.story_data);
+    if (prod.story_data) {
+      const sd = prod.story_data as StoryOption & { _all_options?: StoryOption[] };
+      const all = sd._all_options && sd._all_options.length ? sd._all_options : [sd];
+      setSelectedOption(stripAll(sd));
+      setStoryOptions(all.map(stripAll));
+    }
     if (prod.blueprint_data) setSelectedBlueprint(prod.blueprint_data);
     if (prod.screenplay_text) setScriptText(prod.screenplay_text);
     const phaseMap: Record<Production["status"], Phase> = {
       discovery: 1, blueprint: 2, screenplay: 3, visuals: 4, shots: 5, assembly: 6,
     };
     setActivePhase(phaseMap[prod.status] ?? 1);
+    setProductionKey((k) => k + 1);
     setView("app");
   }, []);
 
@@ -106,6 +128,8 @@ export default function App() {
     setProductionId(null);
     setProductionTitle("");
     setSelectedOption(PRESEEDED_OPTIONS[0]);
+    setStoryOptions([{ ...PRESEEDED_OPTIONS[0], option_id: PRESEEDED_OPTIONS[0].option_id ?? 1 }]);
+    setProductionKey((k) => k + 1);
     setLockedOptionId(PRESEEDED_OPTIONS[0].option_id);
     setSelectedBlueprint(PRESEEDED_BLUEPRINT);
     setScriptText(PRESEEDED_SCRIPT);
@@ -187,11 +211,20 @@ export default function App() {
     setSelectedBlueprint(matchedBlueprint);
   };
 
+  // Phase 1 pushes its full option set here so every generated option/character is
+  // persisted (not just the selected one) — survives reload/resume.
+  const handleOptionsChange = (opts: StoryOption[]) => {
+    setStoryOptions(opts);
+    const selId = selectedOption?.option_id ?? lockedOptionId ?? 1;
+    const sel = opts.find((o) => o.option_id === selId) || opts[0];
+    scheduleSave(1, { story_data: embedAll(sel, opts) });
+  };
+
   const handleLockOption = (option: StoryOption) => {
     handleSelectOption(option);
     setLockedOptionId(option.option_id);
     setActivePhase(2);
-    scheduleSave(2, { story_data: option });
+    scheduleSave(2, { story_data: embedAll(option, storyOptions) });
   };
 
   const handleSelectBlueprint = (blueprint: Blueprint) => {
@@ -455,6 +488,9 @@ export default function App() {
                     <>
                       {activePhase === 1 && (
                         <Phase1Discovery
+                          key={productionKey}
+                          initialOptions={storyOptions}
+                          onOptionsChange={handleOptionsChange}
                           onSelectOption={handleSelectOption}
                           onLockOption={handleLockOption}
                           selectedOptionId={selectedOption?.option_id}

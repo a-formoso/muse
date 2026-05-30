@@ -242,7 +242,7 @@ Output a SINGLE raw JSON object — the option SPINE ONLY. Do NOT write full cha
     "props_sheet": [ { "name": "Prop", "description": "How it acts as an interactive narrative catalyst" } ]
   },
   "character_roster": [
-    { "id": "char_1", "name": "Name", "archetype": "Dramatic archetype function", "cast_orbit": "Protagonist (Core Star) / First Circle Foil / Utility", "gravity": "One-line core narrative purpose" }
+    { "id": "char_1", "name": "Name", "archetype": "Short 2-4 word archetype LABEL only (e.g. The Saboteur, The Fallen Sentinel) — NOT a sentence", "cast_orbit": "Protagonist (Core Star) / First Circle Foil / Utility", "gravity": "Core narrative purpose in ONE short line (max ~14 words)" }
   ]
 }
 

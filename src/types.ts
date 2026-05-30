@@ -211,6 +211,9 @@ export interface StoryOption {
   characters?: Character[];
   /** Roster of character stubs from the spine; full bibles loaded into `characters` on demand. */
   character_roster?: CharacterStub[];
+  /** Persistence-only: all generated Phase-1 options, embedded on the saved (selected)
+   *  option so a reload/resume can re-hydrate the full set. Ignored by downstream phases. */
+  _all_options?: StoryOption[];
 }
 
 export interface Scene {

@@ -1,10 +1,10 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { StoryOption, Character } from "../types";
 import { PRESEEDED_OPTIONS } from "../preseededData";
 import { getAuthHeader } from "../lib/authHeader";
 import {
   Sparkles, ArrowRight, Edit3, CheckCircle, Volume2,
-  Fingerprint, Sliders, Copy, ChevronLeft, ChevronRight, Loader2
+  Fingerprint, Sliders, Copy, ChevronLeft, ChevronRight, Loader2, Lock
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { getStorySetting, getStoryMeaning, getStoryCharacters, getCharacterRoster } from "../utils/schemaConverter";
@@ -14,15 +14,24 @@ interface Phase1DiscoveryProps {
   onLockOption: (option: StoryOption) => void;
   selectedOptionId?: number;
   lockedOptionId?: number;
+  /** All previously-generated options to hydrate from (resume/reload). */
+  initialOptions?: StoryOption[];
+  /** Push the full option set up so the parent can persist every generated option. */
+  onOptionsChange?: (options: StoryOption[]) => void;
 }
 
-export function Phase1Discovery({ onSelectOption, onLockOption, selectedOptionId, lockedOptionId }: Phase1DiscoveryProps) {
+export function Phase1Discovery({ onSelectOption, onLockOption, selectedOptionId, lockedOptionId, initialOptions, onOptionsChange }: Phase1DiscoveryProps) {
   const [premise, setPremise] = useState(
     "What if a high-ranking corporate saboteur is forced to execute a quiet chemical poisoning during a high-stakes dinner inside a smart, hermetic greenhouse that visually manifests human stress hormones?"
   );
   const [isEditingPremise, setIsEditingPremise] = useState(false);
   const OPTION_IDS = [1, 2, 3];
-  const [options, setOptions] = useState<StoryOption[]>([{ ...PRESEEDED_OPTIONS[0], option_id: 1 }]);
+  // Hydrate from persisted options when resuming; otherwise start with the preseeded Option 1.
+  const [options, setOptions] = useState<StoryOption[]>(() =>
+    initialOptions && initialOptions.length
+      ? initialOptions.map((o, i) => ({ ...o, option_id: o.option_id ?? i + 1 }))
+      : [{ ...PRESEEDED_OPTIONS[0], option_id: 1 }]
+  );
   const [activeOptionId, setActiveOptionId] = useState<number>(selectedOptionId || 1);
   const [loadingOptionId, setLoadingOptionId] = useState<number | null>(null);
   const [loadingCharId, setLoadingCharId] = useState<string | null>(null);
@@ -42,8 +51,24 @@ export function Phase1Discovery({ onSelectOption, onLockOption, selectedOptionId
     if (selectedOptionId) setActiveOptionId(selectedOptionId);
   }, [selectedOptionId]);
 
+  // Persist the full option set whenever it changes — but skip the initial hydration
+  // render so we don't redundantly re-save freshly-resumed data.
+  const didHydrateRef = useRef(false);
   useEffect(() => {
-    setActiveCharIndex(0);
+    if (!didHydrateRef.current) { didHydrateRef.current = true; return; }
+    onOptionsChange?.(options);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [options]);
+
+  // On option switch, land on the first ALREADY-GENERATED character (so returning to
+  // an option shows the full profile you built, not a stub) — falling back to index 0.
+  useEffect(() => {
+    const o = options.find((x) => x.option_id === activeOptionId);
+    const r = o ? getCharacterRoster(o) : [];
+    const generated = o ? getStoryCharacters(o) : [];
+    const firstGenIdx = r.findIndex((s) => generated.some((c) => c.id === s.id));
+    setActiveCharIndex(firstGenIdx >= 0 ? firstGenIdx : 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeOptionId]);
 
   // Generate ONE option on demand (Option 1 by default; Options 2 & 3 when the
@@ -181,24 +206,38 @@ export function Phase1Discovery({ onSelectOption, onLockOption, selectedOptionId
             const isActive = activeOptionId === id && !!existing;
             const isSel = selectedOptionId === id;
             const isGenerating = loadingOptionId === id;
+            // Sequential unlock: a not-yet-generated option can only be generated once
+            // the previous one exists (Option 1 is always the preseeded default).
+            const prevExists = id === 1 || options.some((o) => o.option_id === id - 1);
+            const locked = !existing && !prevExists;
             return (
               <button
                 key={id}
-                disabled={loadingOptionId !== null}
+                disabled={loadingOptionId !== null || locked}
                 onClick={() => {
                   if (existing) { setActiveOptionId(id); onSelectOption(existing); }
-                  else { handleGenerateOption(id); }
+                  else if (!locked) { handleGenerateOption(id); }
                 }}
-                title={existing ? `View Option 0${id}` : `Generate a new direction for Option 0${id}`}
-                className={`px-3 py-1.5 rounded-lg font-mono text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1.5 disabled:opacity-60 ${
+                title={
+                  existing ? `View Option 0${id}`
+                  : locked ? `Generate Option 0${id - 1} first`
+                  : `Generate a new direction for Option 0${id}`
+                }
+                className={`px-3 py-1.5 rounded-lg font-mono text-[11px] font-bold transition-all flex items-center gap-1.5 disabled:opacity-60 ${
+                  locked ? "cursor-not-allowed" : "cursor-pointer"
+                } ${
                   isActive
                     ? "bg-orange-600 text-white shadow-md"
                     : existing
                     ? "text-slate-300 hover:text-white hover:bg-white/8"
+                    : locked
+                    ? "text-slate-600 border border-dashed border-white/10"
                     : "text-slate-500 border border-dashed border-white/15 hover:text-white hover:bg-white/5"
                 }`}
               >
-                {isGenerating ? <Loader2 className="w-3 h-3 animate-spin" /> : (!existing && <Sparkles className="w-3 h-3" />)}
+                {isGenerating ? <Loader2 className="w-3 h-3 animate-spin" />
+                  : locked ? <Lock className="w-3 h-3" />
+                  : (!existing && <Sparkles className="w-3 h-3" />)}
                 Option 0{id}
                 {isSel && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />}
               </button>
@@ -406,12 +445,12 @@ export function Phase1Discovery({ onSelectOption, onLockOption, selectedOptionId
               {/* Stub card — shown when the full bible hasn't been generated yet */}
               {!char && activeStub && (
                 <div className="bg-black/50 p-4 rounded-2xl border border-dashed border-white/15 text-xs space-y-3">
-                  <div className="flex justify-between items-center pb-2.5 border-b border-white/8">
-                    <div>
+                  <div className="flex justify-between items-start gap-3 pb-2.5 border-b border-white/8">
+                    <div className="min-w-0">
                       <span className="text-[9px] font-mono text-slate-400 uppercase tracking-widest block mb-0.5">{activeStub.cast_orbit}</span>
                       <span className="font-bold text-white text-sm tracking-tight">{activeStub.name}</span>
                     </div>
-                    <span className="text-[9px] font-mono px-2.5 py-1 rounded bg-white/5 border border-white/15 text-slate-400 uppercase tracking-widest">{activeStub.archetype}</span>
+                    <span className="shrink-0 max-w-[45%] text-right text-[9px] font-mono px-2.5 py-1 rounded bg-white/5 border border-white/15 text-slate-400 uppercase tracking-widest leading-tight">{activeStub.archetype}</span>
                   </div>
                   <p className="text-slate-400 text-[11px] leading-relaxed">{activeStub.gravity}</p>
                   <button
@@ -437,12 +476,12 @@ export function Phase1Discovery({ onSelectOption, onLockOption, selectedOptionId
                     className="bg-black/50 p-4 rounded-2xl border border-white/10 text-xs space-y-3"
                   >
                     {/* Character header */}
-                    <div className="flex justify-between items-center pb-2.5 border-b border-white/8">
-                      <div>
+                    <div className="flex justify-between items-start gap-3 pb-2.5 border-b border-white/8">
+                      <div className="min-w-0">
                         <span className="text-[9px] font-mono text-slate-400 uppercase tracking-widest block mb-0.5">{char.identity.cast_orbit}</span>
                         <span className="font-bold text-white text-sm tracking-tight">{char.identity.name}</span>
                       </div>
-                      <span className="text-[9px] font-mono px-2.5 py-1 rounded bg-white/5 border border-white/15 text-slate-400 uppercase tracking-widest">
+                      <span className="shrink-0 max-w-[45%] text-right text-[9px] font-mono px-2.5 py-1 rounded bg-white/5 border border-white/15 text-slate-400 uppercase tracking-widest leading-tight">
                         {char.identity.archetype}
                       </span>
                     </div>
