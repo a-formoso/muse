@@ -195,13 +195,26 @@ export interface SettingSchema {
 export interface MeaningSchema {
   premise?: string;
   controlling_idea: string;
+  /** The final value charge of the controlling idea: Idealistic | Pessimistic | Ironic. */
+  story_charge?: string;
   dialectical_debate: DialecticalDebate;
   props_sheet: PropItem[];
+}
+
+/** McKee's Inciting Incident — the event that upsets the protagonist's balance and launches the spine. */
+export interface IncitingIncident {
+  event: string;
+  /** How it arises: "decision" or "coincidence". */
+  origin?: string;
+  /** The Major Dramatic Question / "Big Hook" it provokes. */
+  major_dramatic_question?: string;
 }
 
 export interface StoryOption {
   option_id: number;
   title: string;
+  /** McKee Inciting Incident for this direction (from the spine). */
+  inciting_incident?: IncitingIncident;
   // Old style attributes
   step_1_and_2_cosmology_and_actors?: Step1And2CosmologyAndActors;
   step_3_and_4_meaning_and_props?: Step3And4MeaningAndProps;

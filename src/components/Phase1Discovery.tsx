@@ -337,6 +337,20 @@ export function Phase1Discovery({ onSelectOption, onLockOption, selectedOptionId
                         <span className="text-slate-500 block text-[9px] font-mono uppercase tracking-wider mb-0.5">Main Conflict</span>
                         <span className="text-slate-200 text-[11px]">{setting.dimensions.conflict_level}</span>
                       </div>
+                      {opt.inciting_incident?.event && (
+                        <div className="col-span-2 border-t border-white/8 pt-2.5">
+                          <div className="flex items-center justify-between mb-0.5">
+                            <span className="text-orange-400 block text-[9px] font-mono uppercase tracking-wider">Inciting Incident</span>
+                            {opt.inciting_incident.origin && (
+                              <span className="text-[8px] font-mono px-1.5 py-0.5 rounded bg-white/5 border border-white/15 text-slate-400 uppercase tracking-widest">{opt.inciting_incident.origin}</span>
+                            )}
+                          </div>
+                          <span className="text-slate-200 text-[11px] block">{opt.inciting_incident.event}</span>
+                          {opt.inciting_incident.major_dramatic_question && (
+                            <span className="text-slate-400 italic text-[10px] block mt-1">"{opt.inciting_incident.major_dramatic_question}"</span>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </motion.div>
                 ) : (
@@ -348,7 +362,17 @@ export function Phase1Discovery({ onSelectOption, onLockOption, selectedOptionId
                     transition={{ duration: 0.15 }}
                     className="rounded-xl bg-white/5 border border-white/10 p-4 space-y-3"
                   >
-                    <span className="font-mono text-[9px] text-slate-400 tracking-widest uppercase font-bold block">Core Message</span>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-mono text-[9px] text-slate-400 tracking-widest uppercase font-bold block">Core Message</span>
+                      {meaning.story_charge && (() => {
+                        const c = meaning.story_charge.toLowerCase();
+                        const tone = c.includes("ideal") ? "text-emerald-400 border-emerald-500/40 bg-emerald-950/30"
+                          : c.includes("pessim") ? "text-red-400 border-red-500/40 bg-red-950/30"
+                          : "text-amber-400 border-amber-500/40 bg-amber-950/30";
+                        const label = c.includes("ideal") ? "Idealistic" : c.includes("pessim") ? "Pessimistic" : c.includes("iron") ? "Ironic" : meaning.story_charge;
+                        return <span className={`shrink-0 text-[8px] font-mono px-2 py-0.5 rounded border uppercase tracking-widest ${tone}`}>{label} Ending</span>;
+                      })()}
+                    </div>
                     <p className="text-white font-medium italic leading-relaxed text-[11px]">
                       "{meaning.controlling_idea}"
                     </p>

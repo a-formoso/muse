@@ -184,7 +184,7 @@ const PHASE1_DIRECTIONS = [
 
 // Shared system prompt for all small JSON generation units — one stable string
 // maximizes ephemeral prompt-cache hits across the many granular calls.
-const JSON_SYSTEM = "You are an elite, award-winning Hollywood screenwriter and script analyst, governed by Robert McKee (Story) and Stanislavskian behavioral subtext. Output ONLY a single raw JSON object — no markdown, no code fences, no prose.";
+const JSON_SYSTEM = "You are an elite, award-winning Hollywood screenwriter and script analyst governed by Robert McKee's STORY and Stanislavskian subtext. Non-negotiable craft laws: (1) every SCENE turns at least one value from + to - or - to + — a scene that does not turn is cut; (2) drama lives in SUBTEXT — characters never say exactly what they mean, 'on the nose' is forbidden; (3) a CONTROLLING IDEA is always Value + Cause as one full sentence, never a single word; (4) every protagonist carries a conscious desire AND a contradicting unconscious need; (5) reject cliché — true character is revealed only by choice under pressure. Output ONLY a single raw JSON object — no markdown, no code fences, no prose.";
 
 // Full single-character schema fragment, reused by the on-demand character endpoint.
 const CHARACTER_SCHEMA = `{
@@ -237,16 +237,22 @@ Output a SINGLE raw JSON object — the option SPINE ONLY. Do NOT write full cha
   },
   "meaning": {
     "premise": "What if...",
-    "controlling_idea": "Value + Cause (how the climax resolves the central value)",
+    "controlling_idea": "ONE full sentence in Value + Cause form (e.g. 'Justice is restored because an outsider sees the truth') — NEVER a single word",
+    "story_charge": "Idealistic | Pessimistic | Ironic — the final value charge of the controlling idea at climax",
     "dialectical_debate": { "positive_idea": "Belief validating the protagonist's mask", "negative_counter_idea": "Opposing truth forcing vulnerability" },
     "props_sheet": [ { "name": "Prop", "description": "How it acts as an interactive narrative catalyst" } ]
+  },
+  "inciting_incident": {
+    "event": "The single dynamic event that radically upsets the protagonist's balance and launches the spine (occurs early, onscreen)",
+    "origin": "decision | coincidence",
+    "major_dramatic_question": "The hook question it forces the audience to ask (e.g. 'Will X stop Y before Z?')"
   },
   "character_roster": [
     { "id": "char_1", "name": "Name", "archetype": "Short 2-4 word archetype LABEL only (e.g. The Saboteur, The Fallen Sentinel) — NOT a sentence", "cast_orbit": "Protagonist (Core Star) / First Circle Foil / Utility", "gravity": "Core narrative purpose in ONE short line (max ~14 words)" }
   ]
 }
 
-Reject surface tropes and empty exposition. Output ONLY the raw JSON object.`;
+Reject surface tropes and empty exposition. The controlling_idea MUST be a full Value+Cause sentence and story_charge MUST classify its ending. Output ONLY the raw JSON object.`;
 
     const model = await modelForRequest(req);
     const text = await generateWithClaude({ model, system: JSON_SYSTEM, prompt, maxTokens: 3000, timeoutMs: 60_000 });
@@ -486,6 +492,8 @@ ${JSON.stringify({ title: chosenOption.title, setting: chosenOption.setting, mea
 
 Output the STRUCTURE ONLY — sequences with scenes and a master logline. Do NOT generate beats (produced separately per scene). Keep it tight: 1-2 sequences per act, 1-3 scenes per sequence, and every field to one concise sentence.
 
+McKee laws to obey: every SCENE must TURN — its closing_value must be opposite in charge to its opening_value (a scene that doesn't turn is cut). Each sequence builds to a capping scene of greater impact; each act peaks in a harder climactic reversal; Act Three is a compressed race to an irreversible Story Climax.
+
 Output a SINGLE raw JSON object:
 {
   "sequences": {
@@ -549,7 +557,7 @@ Sequence ${sequenceId} (${seq?.title || ""}): theme "${seq?.themeFocus || ""}"; 
 Target scene: ${JSON.stringify(scene || { scene_number: Number(sceneNumber) })}
 Characters (with vocal stress cues): ${JSON.stringify(charDigest)}
 
-Generate the subtextual beat progression (3-5 beats) for THIS scene only. Each beat: an active CAPITALIZED gerund subtext tag in "action" (referencing a character id), a foil "reaction", a spoken mask "text" line, a "vocal_state" (neutral_state / tension_state / panic_state), a somatic "status", and "visual_flora". Keep every field to one tight sentence.
+Generate the subtextual beat progression (3-5 beats) for THIS scene only — built like McKee's Casablanca bazaar grid: each beat is an exchange of SUBTEXT (what the characters are really doing, never what they say). Each beat: an active CAPITALIZED gerund subtext tag in "action" (referencing a character id, e.g. GUILT-TRIPPING, PROPOSITIONING), a contrasting foil "reaction", a spoken mask "text" line whose surface hides that subtext, a "vocal_state" (neutral_state / tension_state / panic_state), a somatic "status", and "visual_flora". The progression must build to a TURNING POINT — the final beat opens the gap that flips the scene from opening_value to its opposite closing_value. Keep every field to one tight sentence.
 
 Output a SINGLE raw JSON object:
 {
