@@ -663,7 +663,72 @@ Generate detailed beat_progressions (minimum 3 beats per scene) for ALL scenes a
   }
 });
 
-// Phase 3: Generate Screenplay Text
+// Shared screenplay system prompt (cached) — used by the per-scene endpoint.
+const SCREENPLAY_SYSTEM = `You are an elite Hollywood screenwriter executing PHASE 3: THE SCRIPT EXECUTION. Translate the blueprint into a production-ready screenplay following these eight laws without exception:
+
+1. FORMAT: Standard screenplay layout. CHARACTER NAMES in uppercase at dialogue headings and all action line introductions. Parentheticals denote active vocal stress states only — never literal physical actions.
+
+2. VOCAL STATE PARENTHETICALS: Translate each beat's vocal_state directly into a parenthetical using the exact stress_cues text from that character's state_telemetry entry.
+
+3. DIALOGUE SUBTEXT CONSTRAINT: Every spoken line acts as a diplomatic surface mask. Dialogue must naturally deliver the psychological agendas mapped in the subtextual_beat_progression gerund tags. Characters never speak inner truths until the Story Climax mask-shattering moment.
+
+4. KINETIC PHYSICALITY: Weave each character's kinetic profile (posture, weight_distribution, gait, gesture_vocabulary, reaction_tempo, micro_movements) directly into action blocks. Replace all dry exposition with physical somatic gestures.
+
+5. FRENCH SCENES: Advance the internal rhythm every time a character enters, exits, or radically alters the power dynamic. Each French scene shift must register in the action block.
+
+6. VARIATION: Alternate rapid visual action blocks with expansive emotionally dense subtextual confrontations. Never run more than three consecutive action lines or three consecutive exchanges without a shift in register.
+
+7. THEMATIC TRANSITIONS: Open and close the scene on a sensory hinge — a shared object, opposing light quality, sound bridge, or word contrast.
+
+8. VISUAL FLORA: Include visual_flora color shifts in action blocks to represent characters' biochemical stress states as described in the beat data.
+
+Output plain text screenplay only.`;
+
+// ── Phase 3: write ONE scene's screenplay, on demand (trimmed context) ──
+app.post("/api/phase3-scene", async (req, res) => {
+  const { blueprint, sequenceId, sceneNumber } = req.body;
+  if (!sequenceId || sceneNumber == null) return res.status(400).json({ success: false, message: "sequenceId and sceneNumber are required." });
+
+  try {
+    const allSeqs = [
+      ...(blueprint?.sequences?.act_one_sequences || []),
+      ...(blueprint?.sequences?.act_two_sequences || []),
+      ...(blueprint?.sequences?.act_three_sequences || []),
+    ];
+    const seq = allSeqs.find((s: any) => s.sequence_id === sequenceId);
+    const scene = (seq?.scenes || []).find((sc: any) => sc.scene_number === Number(sceneNumber));
+    const sceneBeats = (blueprint?.beats || []).find((b: any) => b.target_sequence_id === sequenceId && b.scene_number === Number(sceneNumber));
+    const charDigest = (blueprint?.characters || []).map((c: any) => ({
+      id: c.id,
+      name: c.identity?.name,
+      kinetics: c.kinetics,
+      stress_cues: {
+        neutral_state: c.audio?.state_telemetry?.neutral_state?.stress_cues,
+        tension_state: c.audio?.state_telemetry?.tension_state?.stress_cues,
+        panic_state: c.audio?.state_telemetry?.panic_state?.stress_cues,
+      },
+    }));
+
+    const prompt = `Write the screenplay for ONE scene only.
+Sequence ${sequenceId} — "${seq?.title || ""}"; theme "${seq?.themeFocus || ""}"; macro setting "${seq?.setting_macro || ""}".
+Scene ${sceneNumber}: ${JSON.stringify(scene || { scene_number: Number(sceneNumber) })}
+Beats for THIS scene: ${JSON.stringify(sceneBeats?.micro_blueprint?.subtextual_beat_progression || [])}
+Characters (kinetics + vocal stress cues): ${JSON.stringify(charDigest)}
+
+Write ONLY this one scene's screenplay text. Begin with a slugline (INT./EXT. LOCATION — TIME). Follow the eight laws. Do NOT write other scenes, a title page, or any JSON — plain screenplay text only.`;
+
+    const model = await modelForRequest(req);
+    const sceneText = await generateWithClaude({ model, system: SCREENPLAY_SYSTEM, prompt, maxTokens: 2500, timeoutMs: 75_000 });
+    if (!sceneText) throw new Error("Empty response from Claude.");
+    res.json({ success: true, sceneText, sequenceId, sceneNumber: Number(sceneNumber) });
+  } catch (error: any) {
+    console.error(`Claude Phase 3 scene ${sequenceId}:${sceneNumber} failed:`, error.message);
+    res.status(200).json({ success: false, error: error.message, message: "Could not write this scene (rate limit or backend issue). Try again." });
+  }
+});
+
+// Legacy whole-screenplay Phase 3 endpoint (fallback; the frontend now assembles
+// the script scene-by-scene via /api/phase3-scene).
 app.post("/api/generate-phase3", async (req, res) => {
   const { blueprint } = req.body;
 

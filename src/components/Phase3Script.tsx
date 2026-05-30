@@ -2,8 +2,9 @@ import { useState } from "react";
 import { Blueprint } from "../types";
 import { PRESEEDED_SCRIPT } from "../preseededData";
 import { getAuthHeader } from "../lib/authHeader";
-import { Sparkles, Copy, Calendar, Download, FileText, Check, HelpCircle, AlertTriangle } from "lucide-react";
+import { Sparkles, Copy, Calendar, Download, FileText, Check, HelpCircle, AlertTriangle, Loader2 } from "lucide-react";
 import { motion } from "motion/react";
+import { getBlueprintSequences } from "../utils/schemaConverter";
 
 const PHASE_1_PROMPT = `You are an elite, award-winning Hollywood screenwriter and script analyst. Your creative process is strictly governed by the narrative architecture of Robert McKee (Story) and Stanislavskian behavioral subtext.
 
@@ -307,6 +308,20 @@ export function Phase3Script({ blueprint, selectedScriptText, onUpdateScriptText
   const [activeTab, setActiveTab] = useState<"screenplay" | "playbook">("screenplay");
   const [highlightBioShifts, setHighlightBioShifts] = useState(true);
   const [copiedPromptIndex, setCopiedPromptIndex] = useState<number | null>(null);
+  const [genProgress, setGenProgress] = useState<{ done: number; total: number } | null>(null);
+
+  // Ordered (sequence, scene) list flattened from the blueprint structure.
+  const orderedScenes = (() => {
+    const seqs = getBlueprintSequences(blueprint);
+    const all = [
+      ...(seqs.act_one_sequences || []),
+      ...(seqs.act_two_sequences || []),
+      ...(seqs.act_three_sequences || []),
+    ];
+    const list: { sequenceId: string; sceneNumber: number }[] = [];
+    all.forEach((s: any) => (s.scenes || []).forEach((sc: any) => list.push({ sequenceId: s.sequence_id, sceneNumber: sc.scene_number })));
+    return list;
+  })();
 
   const handleCopyPrompt = (text: string, index: number) => {
     navigator.clipboard.writeText(text);
@@ -314,32 +329,69 @@ export function Phase3Script({ blueprint, selectedScriptText, onUpdateScriptText
     setTimeout(() => setCopiedPromptIndex(null), 2000);
   };
 
-  // Generate customized screenplay script from locked pre-production blueprint
+  // Write the screenplay scene-by-scene (sequential, assembled live) so each
+  // request stays small enough to clear the rate limit. Falls back to the legacy
+  // whole-script endpoint when the blueprint has no structured sequences.
   const handleGenerateScript = async () => {
     setIsLoading(true);
     setErrorInfo(null);
-    try {
-      const resp = await fetch("/api/generate-phase3", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...(await getAuthHeader()) },
-        body: JSON.stringify({ blueprint }),
-      });
-      const data = await resp.json();
-      if (data.success && data.script) {
-        setScriptText(data.script);
-        onUpdateScriptText(data.script);
-      } else {
-        setErrorInfo(data.message || "Could not execute screenplay compilation. Rendered pre-seeded McKees standard script.");
+
+    if (orderedScenes.length === 0) {
+      try {
+        const resp = await fetch("/api/generate-phase3", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...(await getAuthHeader()) },
+          body: JSON.stringify({ blueprint }),
+        });
+        const data = await resp.json();
+        if (data.success && data.script) {
+          setScriptText(data.script);
+          onUpdateScriptText(data.script);
+        } else {
+          setErrorInfo(data.message || "Could not compile screenplay. Rendered pre-seeded script.");
+          setScriptText(PRESEEDED_SCRIPT);
+          onUpdateScriptText(PRESEEDED_SCRIPT);
+        }
+      } catch {
+        setErrorInfo("Script endpoint unreachable. Restored pre-seeded script.");
         setScriptText(PRESEEDED_SCRIPT);
         onUpdateScriptText(PRESEEDED_SCRIPT);
+      } finally {
+        setIsLoading(false);
       }
-    } catch (e: any) {
-      setErrorInfo("Local script compiler endpoint caught a timeout exception. Restoring pre-seeded Hollywood script.");
-      setScriptText(PRESEEDED_SCRIPT);
-      onUpdateScriptText(PRESEEDED_SCRIPT);
-    } finally {
-      setIsLoading(false);
+      return;
     }
+
+    const parts: string[] = [];
+    let failures = 0;
+    for (let i = 0; i < orderedScenes.length; i++) {
+      const { sequenceId, sceneNumber } = orderedScenes[i];
+      setGenProgress({ done: i, total: orderedScenes.length });
+      try {
+        const resp = await fetch("/api/phase3-scene", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...(await getAuthHeader()) },
+          body: JSON.stringify({ blueprint, sequenceId, sceneNumber }),
+        });
+        const data = await resp.json();
+        if (data.success && data.sceneText) {
+          parts.push(String(data.sceneText).trim());
+        } else {
+          failures++;
+          parts.push(`[Scene ${sequenceId} · ${sceneNumber} — generation failed, click Generate again to retry]`);
+        }
+      } catch {
+        failures++;
+        parts.push(`[Scene ${sequenceId} · ${sceneNumber} — connection error, retry]`);
+      }
+      const assembled = parts.join("\n\n");
+      setScriptText(assembled);
+      onUpdateScriptText(assembled);
+      if (i < orderedScenes.length - 1) await new Promise((r) => setTimeout(r, 1500));
+    }
+    if (failures > 0) setErrorInfo(`${failures} scene(s) failed to generate — click Generate Script again to retry them.`);
+    setGenProgress(null);
+    setIsLoading(false);
   };
 
   const handleCopy = () => {
@@ -453,8 +505,10 @@ Objective: Translate the complete, locked JSON blueprint into a professional, pr
             disabled={isLoading}
             className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-orange-600 hover:bg-orange-500 disabled:opacity-50 text-xs text-white font-mono font-bold transition-all shadow-lg shadow-orange-950/30 cursor-pointer"
           >
-            <Sparkles className="w-4 h-4" />
-            {isLoading ? "Assembling…" : "Generate Script"}
+            {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+            {isLoading
+              ? (genProgress ? `Writing scene ${genProgress.done + 1}/${genProgress.total}…` : "Assembling…")
+              : "Generate Script"}
           </button>
 
           {onProceedToVisuals && (
