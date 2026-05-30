@@ -13,7 +13,7 @@ import { ProductionsMenu } from "./components/ProductionsMenu";
 import { AuthModal } from "./components/AuthModal";
 import { useAuth } from "./context/AuthContext";
 import { supabase } from "./lib/supabase";
-import { saveProduction, type Production } from "./lib/productions";
+import { saveProduction, loadLatestProduction, type Production } from "./lib/productions";
 import { usageLabel, isLimitReached, canAccessPhase } from "./lib/accessTier";
 import { PhaseUpsell } from "./components/PhaseUpsell";
 import { motion, AnimatePresence } from "motion/react";
@@ -122,6 +122,20 @@ export default function App() {
     setProductionKey((k) => k + 1);
     setView("app");
   }, []);
+
+  // ── Auto-resume the latest in-progress production on load/refresh ──
+  // Without this, a hard refresh boots a fresh (preseeded) workspace even though the
+  // work was saved — so generated options/characters appeared lost on reload.
+  const autoResumedRef = useRef(false);
+  useEffect(() => {
+    if (loading || !user || accessTier.tier === "none") return;
+    if (autoResumedRef.current || productionId) return;
+    autoResumedRef.current = true;
+    (async () => {
+      const prod = await loadLatestProduction(user.id);
+      if (prod) handleResume(prod);
+    })();
+  }, [loading, user, accessTier, productionId, handleResume]);
 
   // ── New production ──
   const handleNew = useCallback(() => {
